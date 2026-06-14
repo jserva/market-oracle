@@ -560,10 +560,10 @@ def setup_schedule():
     # Apertura mercado: 15:30 España (9:30 AM ET)
     schedule.every().day.at("15:30").do(guarded(task_market_open))
 
-    # Monitoreo cada 5 min durante sesión (15:35 → 21:55)
+    # Monitoreo cada 2 min durante sesión (15:32 → 21:58)
     for h in range(15, 22):
-        for m in range(0, 60, 5):
-            if (h == 15 and m < 35) or (h == 21 and m > 55):
+        for m in range(0, 60, 2):
+            if (h == 15 and m < 32) or (h == 21 and m > 58):
                 continue
             schedule.every().day.at(f"{h:02d}:{m:02d}").do(guarded(task_monitor))
 
