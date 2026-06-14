@@ -187,11 +187,13 @@ def build_prompt(poly, fmp):
         if d.get("action"): l.append(f"  ANALYST:{d.get('firm','?')} {d.get('action','?')} {d.get('fromGrade','?')}->{d.get('toGrade','?')}")
         if d.get("insideBuy"): l.append("  INSIDER_BUY")
         fc_lines.append("\n".join(l))
+    fc_joined = "\n".join(fc_lines) if fc_lines else "n/d"
+    earnings_today = fmp.get('_today','ninguno')
     return f"""Analista cuantitativo day trading. Selecciona 3 trades para ganar mas 2% hoy.
 
 POLYGON: {pc}
-FMP: {"\n".join(fc_lines) or "n/d"}
-Earnings hoy: {fmp.get('_today','ninguno')}
+FMP: {fc_joined}
+Earnings hoy: {earnings_today}
 
 BLOQUES OBLIGATORIOS POR ACCION:
 1-CATALIZADOR: nuevo hoy o ya descontado?
