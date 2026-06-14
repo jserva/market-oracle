@@ -4,7 +4,7 @@ Market Oracle — Railway Cloud Worker
 Autor: generado por Claude para Juan Rafael
 
 FLUJO DIARIO:
-  14:45 España → Análisis pre-market + guarda recomendaciones en Supabase
+  15:25 España → Análisis pre-market + guarda recomendaciones en Supabase (9:25 AM ET)
   15:30 España → Mercado abre → entra en trades recomendados (paper)
   15:30-22:00  → Cada 5 min revisa precios → detecta target/stop
   22:00 España → Cierra posiciones abiertas → guarda P&L del día
@@ -217,7 +217,7 @@ REGLA: {{ al inicio }} al final. Sin comillas en strings. Max 80 chars texto.
 # Guarda trades activos durante la sesión
 active_trades = {}  # {sym: {entry, target, stop, dir, recommendation_id}}
 
-# ─── TAREA 1: ANÁLISIS 14:45 ──────────────────────────────────────
+# ─── TAREA 1: ANÁLISIS 15:25 ──────────────────────────────────────
 def task_analysis():
     """Corre el análisis completo y guarda recomendaciones en Supabase"""
     log("═" * 55)
@@ -550,8 +550,12 @@ def guarded(fn):
     return wrapper
 
 def setup_schedule():
-    # Análisis pre-market: 14:45 España
-    schedule.every().day.at("14:45").do(guarded(task_analysis))
+    # Análisis pre-market: 15:25 España (9:25 AM ET — 5 min antes apertura)
+    schedule.every().monday.at("15:25").do(guarded(task_analysis))
+    schedule.every().tuesday.at("15:25").do(guarded(task_analysis))
+    schedule.every().wednesday.at("15:25").do(guarded(task_analysis))
+    schedule.every().thursday.at("15:25").do(guarded(task_analysis))
+    schedule.every().friday.at("15:25").do(guarded(task_analysis))
 
     # Apertura mercado: 15:30 España (9:30 AM ET)
     schedule.every().day.at("15:30").do(guarded(task_market_open))
@@ -574,7 +578,7 @@ def main():
     log("═" * 55)
     log("MARKET ORACLE — Railway Cloud Worker")
     log(f"Zona horaria: Europa/Madrid")
-    log(f"Análisis diario: 14:45 | Apertura: 15:30 | Cierre: 22:00")
+    log(f"Análisis diario: 15:25 (5 min antes apertura) | Apertura: 15:30 | Cierre: 22:00")
     log(f"Supabase: {'✓ CONECTADO' if SUPABASE_URL else '✗ NO CONFIGURADO'}")
     log(f"Anthropic: {'✓ OK' if ANTHROPIC_KEY else '✗ FALTA KEY'}")
     log("═" * 55)
