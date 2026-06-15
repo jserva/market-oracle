@@ -153,7 +153,7 @@ def call_claude(system, user, max_tokens=8000):
         raise ValueError("Falta ANTHROPIC_KEY como variable de entorno en Railway")
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
-        headers={"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY},
+        headers={"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01"},
         json={
             "model": "claude-sonnet-4-20250514",
             "max_tokens": max_tokens,
