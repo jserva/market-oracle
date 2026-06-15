@@ -584,10 +584,13 @@ def main():
     log("═" * 55)
 
     import sys
-    if "--ahora" in sys.argv:
-        log("▶ Ejecutando análisis AHORA (modo manual)...")
+    run_now = "--ahora" in sys.argv or os.environ.get("RUN_ON_START","").lower() == "true"
+    if run_now:
+        log("▶ Ejecutando análisis AHORA...")
         task_analysis()
-        return
+        if "--ahora" in sys.argv:
+            return
+        log("✓ Análisis completado — arrancando scheduler normal...")
 
     if "--test-monitor" in sys.argv:
         log("▶ Test de monitoreo...")
