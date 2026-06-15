@@ -317,7 +317,7 @@ def task_analysis():
         ) or "No disponible"
         analysis = call_claude(
             build_prompt(poly, fmp),
-            f"Hoy {today}. Candidatas: {list_str}. ES={sc.get('es','?')} NQ={sc.get('nq','?')} VIX={sc.get('vix','?')}. Earnings:{fmp.get('_today','ninguno')}. Solo JSON con {{",
+            f"Hoy {today}. Candidatas: {list_str}. ES={sc.get('es','?')} NQ={sc.get('nq','?')} VIX={sc.get('vix','?')}. Earnings:{fmp.get('_today','ninguno')}.\n\nPRECIOS EN TIEMPO REAL — OBLIGATORIO usar estos precios para calcular entradas targets y stops:\n{td_str}\n\nSolo JSON con {{",
             10000
         )
         trades = analysis.get("trades", [])
