@@ -25,6 +25,54 @@ SUPABASE_KEY  = os.environ.get("SUPABASE_KEY",   "")   # anon public key
 TZ_SPAIN = ZoneInfo("Europe/Madrid")
 TZ_ET    = ZoneInfo("America/New_York")
 
+# ─── TWELVE DATA — PRECIOS EN TIEMPO REAL ─────────────────────────
+TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
+
+def get_realtime_prices(tickers):
+    """Obtiene precios en tiempo real vía Twelve Data (incluyendo pre-market)"""
+    if not tickers:
+        return {}
+    symbols = ",".join(tickers[:8])
+    results = {}
+    try:
+        # Quote completo con pre-market
+        url = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
+        req = urllib.request.Request(url, headers={"User-Agent": "market-oracle"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        
+        # Si es un solo ticker, Twelve Data devuelve el objeto directamente
+        if len(tickers) == 1:
+            data = {tickers[0]: data}
+        
+        for sym, q in data.items():
+            if isinstance(q, dict) and "close" in q:
+                price = float(q.get("close", 0))
+                prev_close = float(q.get("previous_close", 0))
+                open_price = float(q.get("open", 0)) if q.get("open") else None
+                pre_market = float(q.get("pre_market", 0)) if q.get("pre_market") else None
+                
+                # Precio más actual disponible: pre-market > open > close
+                current = pre_market or open_price or price
+                gap_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
+                
+                results[sym] = {
+                    "current": round(current, 2),
+                    "prev_close": round(prev_close, 2),
+                    "open": round(open_price, 2) if open_price else None,
+                    "pre_market": round(pre_market, 2) if pre_market else None,
+                    "gap_pct": round(gap_pct, 2),
+                    "source": "pre_market" if pre_market else ("open" if open_price else "close")
+                }
+                log(f"  {sym}: ${current:.2f} ({'+' if gap_pct>=0 else ''}{gap_pct:.2f}% vs cierre) [{results[sym]['source']}]")
+        
+        return results
+    except Exception as e:
+        log(f"Twelve Data error: {e}", "WARN")
+        return {}
+
+
+
 # ─── LOGGING ──────────────────────────────────────────────────────
 def log(msg, level="INFO"):
     now = datetime.now(TZ_SPAIN).strftime("%Y-%m-%d %H:%M:%S")
@@ -134,7 +182,18 @@ def get_fmp(tickers):
     return res
 
 def get_current_price(sym):
-    """Precio actual via FMP quote"""
+    """Precio actual via Twelve Data (tiempo real) con fallback a FMP"""
+    try:
+        url = f"https://api.twelvedata.com/price?symbol={sym}&apikey={TWELVE_KEY}"
+        req = urllib.request.Request(url, headers={"User-Agent": "market-oracle"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        price = float(data.get("price", 0))
+        if price:
+            return price
+    except:
+        pass
+    # Fallback a FMP
     try:
         q = (fmp_get(f"/v3/quote/{sym}") or [{}])[0]
         return float(q.get("price", 0)) or None
