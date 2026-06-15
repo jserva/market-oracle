@@ -335,18 +335,24 @@ def task_analysis():
 
         # Guardar análisis diario en Supabase
         today_iso = date.today().isoformat()
-        sb_insert("daily_analysis", {
+        da_result = sb_insert("daily_analysis", {
             "date": today_iso,
             "analysis_time": datetime.now(TZ_SPAIN).isoformat(),
             "vix": analysis.get("vix"),
             "spx_futures": analysis.get("spx"),
+            "nq_futures": sc.get("nq"),
+            "es_futures": sc.get("es"),
             "environment": analysis.get("env"),
             "score": analysis.get("score"),
             "market_bias": sc.get("bias"),
             "summary": analysis.get("summary","")[:500],
             "screened_count": len(tickers),
-            "trades_count": len(trades)
+            "trades_count": len(trades),
+            "td_prices_json": json.dumps(td_prices),
+            "full_json": json.dumps(analysis)[:3000]
         })
+        if not da_result:
+            log("⚠️  daily_analysis INSERT falló — revisa columnas en Supabase", "WARN")
 
         # Guardar cada trade recomendado
         global active_trades
@@ -389,10 +395,17 @@ def task_analysis():
                 "pnl_pct": None,
                 "pnl_usd": None,       # basado en $10,000 por trade
                 "result": None,        # WIN | LOSS | SCRATCH
-                "status": "PENDING"    # PENDING | ACTIVE | CLOSED
+                "status": "PENDING",   # PENDING | ACTIVE | CLOSED
+                # Precio real de Twelve Data en el momento del análisis
+                "price_at_analysis": td_prices.get(sym, {}).get("current"),
+                "gap_pct_realtime": td_prices.get(sym, {}).get("gap_pct"),
+                "open_price_day": td_prices.get(sym, {}).get("open"),
+                "prev_close_day": td_prices.get(sym, {}).get("prev_close"),
             }
-            result = sb_insert("trades", rec_data)
-            rec_id = result[0]["id"] if result else None
+            trade_insert = sb_insert("trades", rec_data)
+            if not trade_insert:
+                log(f"⚠️  {sym}: INSERT en trades falló — revisa schema Supabase", "WARN")
+            rec_id = trade_insert[0]["id"] if trade_insert else None
 
             # Preparar para seguimiento durante sesión
             active_trades[sym] = {
@@ -414,7 +427,11 @@ def task_analysis():
             if t.get("entryCondition"):
                 log(f"  → {t.get('entryCondition','')}", "INFO")
 
-        log("Análisis guardado en Supabase ✓", "OK")
+        saved_count = sum(1 for t in active_trades.values() if t.get("id"))
+        if saved_count > 0:
+            log(f"Análisis guardado en Supabase ✓ ({saved_count}/{len(trades)} trades)", "OK")
+        else:
+            log("⚠️  Trades NO guardados en Supabase — verifica SUPABASE_KEY", "WARN")
         log("⏱  Próximo paso: Apertura mercado 15:30 España", "INFO")
 
     except Exception as e:
@@ -462,7 +479,7 @@ def task_market_open():
             trade["status"] = "WAITING_RETRACE"
             log(f"⏳ {sym} esperando retroceso a ${trade['entry']:.2f} (actual: ${price:.2f})", "INFO")
 
-# ─── TAREA 3: MONITOREO CADA 5 MIN ───────────────────────────────
+# ─── TAREA 3: MONITOREO CADA 2 MIN ───────────────────────────────
 def task_monitor():
     """Revisa precios cada 5 min y detecta target/stop"""
     global active_trades
@@ -582,7 +599,7 @@ def close_trade(sym, trade, exit_price, pnl_pct, pnl_usd, reason):
 def task_daily_summary():
     """Muestra y guarda el resumen del día"""
     today_iso = date.today().isoformat()
-    trades_hoy = sb_select("trades", params={"date": f"eq.{today_iso}", "status": "eq.CLOSED"})
+    trades_hoy = sb_select("trades", params={"date": f"eq.{today_iso}", "status": "eq.CLOSED", "select": "*"}) or []
     if not trades_hoy:
         log("Sin trades cerrados hoy para el resumen", "INFO")
         return
@@ -606,15 +623,29 @@ def task_daily_summary():
     log("═" * 55)
 
     # Guardar resumen en Supabase
-    sb_insert("daily_summary", {
+    scratches = total - wins - losses
+    best = max(trades_hoy, key=lambda t: t.get("pnl_usd",0) or 0, default={})
+    worst = min(trades_hoy, key=lambda t: t.get("pnl_usd",0) or 0, default={})
+    ds_result = sb_insert("daily_summary", {
         "date": today_iso,
         "total_trades": total,
         "wins": wins,
         "losses": losses,
+        "scratches": scratches,
         "win_rate_pct": round(win_rate, 1),
         "total_pnl_usd": round(total_pnl, 2),
-        "capital_per_trade": 10000
+        "avg_pnl_usd": round(total_pnl / total, 2) if total else 0,
+        "best_trade": best.get("ticker",""),
+        "best_pnl_usd": best.get("pnl_usd", 0),
+        "worst_trade": worst.get("ticker",""),
+        "worst_pnl_usd": worst.get("pnl_usd", 0),
+        "capital_per_trade": 10000,
+        "notes": ""
     })
+    if not ds_result:
+        log("⚠️  daily_summary INSERT falló", "WARN")
+    else:
+        log("Resumen del día guardado en Supabase ✓", "OK")
 
 # ─── SCHEDULER ────────────────────────────────────────────────────
 def is_weekday():
