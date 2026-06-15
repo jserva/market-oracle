@@ -29,46 +29,58 @@ TZ_ET    = ZoneInfo("America/New_York")
 TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
 
 def get_realtime_prices(tickers):
-    """Obtiene precios en tiempo real vía Twelve Data (incluyendo pre-market)"""
+    """Obtiene precio tick-a-tick en tiempo real via Twelve Data /price endpoint"""
     if not tickers:
         return {}
-    symbols = ",".join(tickers[:8])
     results = {}
     try:
-        # Quote completo con pre-market
-        url = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "market-oracle"})
+        # /price devuelve el último precio de mercado en tiempo real
+        symbols = ",".join(tickers[:8])
+        url_price = f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}"
+        req = urllib.request.Request(url_price, headers={"User-Agent": "market-oracle"})
         with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
+            price_data = json.loads(r.read())
         
-        # Si es un solo ticker, Twelve Data devuelve el objeto directamente
+        # Si es un solo ticker devuelve dict directo, si son varios devuelve {sym: {price:...}}
         if len(tickers) == 1:
-            data = {tickers[0]: data}
-        
-        for sym, q in data.items():
-            if isinstance(q, dict) and "close" in q:
-                price = float(q.get("close", 0))
-                prev_close = float(q.get("previous_close", 0))
+            price_data = {tickers[0]: price_data}
+
+        # /quote para prev_close y open (datos del día)
+        url_quote = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
+        req2 = urllib.request.Request(url_quote, headers={"User-Agent": "market-oracle"})
+        with urllib.request.urlopen(req2, timeout=15) as r:
+            quote_data = json.loads(r.read())
+        if len(tickers) == 1:
+            quote_data = {tickers[0]: quote_data}
+
+        for sym in tickers:
+            try:
+                # Precio en tiempo real del /price endpoint
+                p = price_data.get(sym, {})
+                current = float(p.get("price", 0)) if p.get("price") else None
+                if not current:
+                    continue
+
+                # Datos del día del /quote endpoint
+                q = quote_data.get(sym, {})
+                prev_close = float(q.get("previous_close", 0)) if q.get("previous_close") else 0
                 open_price = float(q.get("open", 0)) if q.get("open") else None
-                pre_market = float(q.get("pre_market", 0)) if q.get("pre_market") else None
-                
-                # Precio más actual disponible: pre-market > open > close
-                current = pre_market or open_price or price
                 gap_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
-                
+
                 results[sym] = {
                     "current": round(current, 2),
                     "prev_close": round(prev_close, 2),
                     "open": round(open_price, 2) if open_price else None,
-                    "pre_market": round(pre_market, 2) if pre_market else None,
                     "gap_pct": round(gap_pct, 2),
-                    "source": "pre_market" if pre_market else ("open" if open_price else "close")
+                    "source": "realtime"
                 }
-                log(f"  {sym}: ${current:.2f} ({'+' if gap_pct>=0 else ''}{gap_pct:.2f}% vs cierre) [{results[sym]['source']}]")
-        
+                log(f"  {sym}: PRECIO_REAL=${current:.2f} | open=${open_price:.2f} | prev_close=${prev_close:.2f} | gap={'+' if gap_pct>=0 else ''}{gap_pct:.1f}%")
+            except Exception as e2:
+                log(f"  {sym}: error parseando precio - {e2}", "WARN")
+
         return results
     except Exception as e:
-        log(f"Twelve Data error: {e}", "WARN")
+        log(f"Twelve Data error: {e} — usando FMP como fallback", "WARN")
         return {}
 
 
