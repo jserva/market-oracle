@@ -37,9 +37,8 @@ def get_realtime_prices(tickers):
         # /price devuelve el último precio de mercado en tiempo real
         symbols = ",".join(tickers[:8])
         url_price = f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}"
-        req = urllib.request.Request(url_price, headers={"User-Agent": "market-oracle"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            price_data = json.loads(r.read())
+        r1 = requests.get(url_price, headers={"User-Agent": "market-oracle"}, timeout=15)
+        price_data = r1.json()
         
         # Si es un solo ticker devuelve dict directo, si son varios devuelve {sym: {price:...}}
         if len(tickers) == 1:
@@ -47,9 +46,8 @@ def get_realtime_prices(tickers):
 
         # /quote para prev_close y open (datos del día)
         url_quote = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
-        req2 = urllib.request.Request(url_quote, headers={"User-Agent": "market-oracle"})
-        with urllib.request.urlopen(req2, timeout=15) as r:
-            quote_data = json.loads(r.read())
+        r2 = requests.get(url_quote, headers={"User-Agent": "market-oracle"}, timeout=15)
+        quote_data = r2.json()
         if len(tickers) == 1:
             quote_data = {tickers[0]: quote_data}
 
