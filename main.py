@@ -301,9 +301,20 @@ def task_analysis():
         fmp = get_fmp(tickers) if tickers else {}
         log(f"→ Earnings hoy: {fmp.get('_today','ninguno')}", "OK")
 
+        # Fase 3.5: Twelve Data precios en tiempo real
+        log("Fase 3.5/4: Twelve Data precios en tiempo real...")
+        td_prices = get_realtime_prices(tickers) if tickers else {}
+        log(f"  → {len(td_prices)} precios en tiempo real", "OK")
+
         # Fase 4: Claude análisis
         log("Fase 4/4: Análisis IA (60-90s)...")
         list_str = "; ".join(f"{c['t']} {c.get('ch','')} {c.get('w','')}" for c in sc.get("c",[]))
+        td_str = "\n".join(
+            f"{s}: PRECIO_ACTUAL=${d['current']} ({'+' if d['gap_pct']>=0 else ''}{d['gap_pct']}% vs cierre_ayer) [fuente:{d['source']}] prev_close=${d['prev_close']}"
+            + (f" open=${d['open']}" if d.get('open') else "")
+            + (f" PRE-MARKET=${d['pre_market']}" if d.get('pre_market') else "")
+            for s, d in td_prices.items()
+        ) or "No disponible"
         analysis = call_claude(
             build_prompt(poly, fmp),
             f"Hoy {today}. Candidatas: {list_str}. ES={sc.get('es','?')} NQ={sc.get('nq','?')} VIX={sc.get('vix','?')}. Earnings:{fmp.get('_today','ninguno')}. Solo JSON con {{",
