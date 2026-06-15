@@ -72,7 +72,8 @@ def get_realtime_prices(tickers):
                     "gap_pct": round(gap_pct, 2),
                     "source": "realtime"
                 }
-                log(f"  {sym}: PRECIO_REAL=${current:.2f} | open=${open_price:.2f} | prev_close=${prev_close:.2f} | gap={'+' if gap_pct>=0 else ''}{gap_pct:.1f}%")
+                open_str = f"${open_price:.2f}" if open_price else "N/A"
+                log(f"  {sym}: PRECIO_REAL=${current:.2f} | open={open_str} | prev_close=${prev_close:.2f} | gap={'+' if gap_pct>=0 else ''}{gap_pct:.1f}%")
             except Exception as e2:
                 log(f"  {sym}: error parseando precio - {e2}", "WARN")
 
@@ -192,13 +193,12 @@ def get_fmp(tickers):
     return res
 
 def get_current_price(sym):
-    """Precio actual via Twelve Data (tiempo real) con fallback a FMP"""
+    """Precio actual via Twelve Data /price (tiempo real) con fallback a FMP"""
     try:
         url = f"https://api.twelvedata.com/price?symbol={sym}&apikey={TWELVE_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "market-oracle"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
-        price = float(data.get("price", 0))
+        r = requests.get(url, headers={"User-Agent": "market-oracle"}, timeout=10)
+        data = r.json()
+        price = float(data.get("price", 0) or 0)
         if price:
             return price
     except:
@@ -206,7 +206,7 @@ def get_current_price(sym):
     # Fallback a FMP
     try:
         q = (fmp_get(f"/v3/quote/{sym}") or [{}])[0]
-        return float(q.get("price", 0)) or None
+        return float(q.get("price", 0) or 0) or None
     except:
         return None
 
