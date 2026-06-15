@@ -155,7 +155,7 @@ def call_claude(system, user, max_tokens=8000):
         "https://api.anthropic.com/v1/messages",
         headers={"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01"},
         json={
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-sonnet-4-5",
             "max_tokens": max_tokens,
             "tools": [{"type":"web_search_20250305","name":"web_search"}],
             "system": system,
