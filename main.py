@@ -11,8 +11,7 @@ FLUJO DIARIO:
   22:05 España → Resumen diario en consola
 """
 
-import os, sys, time, json, requests, schedule
-os.environ["PYTHONUNBUFFERED"] = "1"
+import os, time, json, requests, schedule
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
@@ -460,9 +459,11 @@ def task_market_open():
 
         strategy = trade.get("strategy","open")
         if strategy == "open":
-            # Entrar directamente en apertura al precio recomendado
-            actual_entry = trade["entry"]
+            # Entrar al precio REAL de apertura (Twelve Data)
+            actual_entry = price  # precio real del mercado ahora mismo
+            shares = round(10000 / actual_entry, 4) if actual_entry else 0
             trade["actual_entry"] = actual_entry
+            trade["shares"] = shares
             trade["status"] = "ACTIVE"
             if trade.get("id"):
                 sb_update("trades", {
@@ -470,7 +471,7 @@ def task_market_open():
                     "entry_time": datetime.now(TZ_SPAIN).isoformat(),
                     "status": "ACTIVE"
                 }, "id", trade["id"])
-            log(f"{'▲' if trade['dir']=='long' else '▼'} {sym} ENTRADA en ${actual_entry:.2f} (estrategia: OPEN)", "MONEY")
+            log(f"{'▲' if trade['dir']=='long' else '▼'} {sym} ENTRADA REAL en ${actual_entry:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
 
         elif strategy == "wait15":
             trade["status"] = "WAITING"
@@ -512,7 +513,9 @@ def task_monitor():
                 trade["status"] = "ACTIVE"
                 if trade.get("id"):
                     sb_update("trades", {"actual_entry_price": actual_entry, "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
-                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA (wait15) en ${actual_entry:.2f}", "MONEY")
+                shares = round(10000 / actual_entry, 4) if actual_entry else 0
+                trade["shares"] = shares
+                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA WAIT15 en ${actual_entry:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
             continue
 
         if trade["status"] == "WAITING_RETRACE":
@@ -523,7 +526,9 @@ def task_monitor():
                 trade["status"] = "ACTIVE"
                 if trade.get("id"):
                     sb_update("trades", {"actual_entry_price": trade["entry"], "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
-                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA RETRACE en ${trade['entry']:.2f} (precio: ${price:.2f})", "MONEY")
+                shares = round(10000 / trade["entry"], 4)
+                trade["shares"] = shares
+                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA RETRACE en ${trade['entry']:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
             else:
                 log(f"⏳ {sym} esperando retrace | Actual: ${price:.2f} | Objetivo: ${trade['entry']:.2f} | Diff: {diff_pct:.1f}%")
             continue
@@ -580,10 +585,14 @@ def task_market_close():
     task_daily_summary()
 
 def close_trade(sym, trade, exit_price, pnl_pct, pnl_usd, reason):
-    """Registra el cierre de un trade"""
+    """Registra el cierre de un trade con P&L sobre $10,000"""
     result = "WIN" if pnl_usd > 50 else "LOSS" if pnl_usd < -50 else "SCRATCH"
     icon = "✅" if result=="WIN" else "❌" if result=="LOSS" else "➖"
-    log(f"{icon} {sym} CIERRE ({reason}) | Entrada: ${trade.get('actual_entry',trade['entry']):.2f} | Salida: ${exit_price:.2f} | P&L: {'+' if pnl_usd>=0 else ''}{pnl_usd:.0f}$ ({'+' if pnl_pct>=0 else ''}{pnl_pct:.2f}%) | {result}", "MONEY")
+    entry = trade.get("actual_entry") or trade["entry"]
+    shares = trade.get("shares") or round(10000 / entry, 4) if entry else 0
+    log(f"{icon} {sym} CIERRE ({reason})", "MONEY")
+    log(f"   Entrada: ${entry:.2f} | Salida: ${exit_price:.2f} | Acciones: {shares:.2f}", "MONEY")
+    log(f"   Capital: $10,000 | P&L: {'+' if pnl_usd>=0 else ''}{pnl_usd:.2f}$ ({'+' if pnl_pct>=0 else ''}{pnl_pct:.2f}%) | {result}", "MONEY")
     trade["status"] = "CLOSED"
     if trade.get("id"):
         sb_update("trades", {
@@ -598,8 +607,41 @@ def close_trade(sym, trade, exit_price, pnl_pct, pnl_usd, reason):
 
 # ─── TAREA 5: RESUMEN DIARIO ──────────────────────────────────────
 def task_daily_summary():
-    """Muestra y guarda el resumen del día"""
+    """Cierra todos los trades abiertos al EOD y guarda el resumen del día"""
+    global active_trades
     today_iso = date.today().isoformat()
+
+    # ── PASO 1: Cerrar todos los trades que quedaron abiertos ─────
+    log("CIERRE EOD — cerrando posiciones abiertas...", "TRADE")
+    for sym, trade in list(active_trades.items()):
+        if trade["status"] == "CLOSED":
+            continue
+
+        price_eod = get_current_price(sym)
+
+        if trade["status"] in ("WAITING", "WAITING_RETRACE", "PENDING"):
+            # Nunca entró — cerrar sin P&L
+            log(f"➖ {sym} EOD_NO_ENTRY — nunca alcanzó la entrada", "TRADE")
+            trade["status"] = "CLOSED"
+            if trade.get("id"):
+                sb_update("trades", {
+                    "exit_reason": "EOD_NO_ENTRY",
+                    "pnl_pct": 0,
+                    "pnl_usd": 0,
+                    "result": "SCRATCH",
+                    "status": "CLOSED",
+                    "exit_time": datetime.now(TZ_SPAIN).isoformat()
+                }, "id", trade["id"])
+
+        elif trade["status"] == "ACTIVE" and price_eod:
+            # Trade activo — cerrar al precio actual
+            entry = trade.get("actual_entry") or trade["entry"]
+            is_long = trade.get("dir", "long") == "long"
+            pnl_pct = ((price_eod - entry) / entry * 100) if is_long else ((entry - price_eod) / entry * 100)
+            pnl_usd = (pnl_pct / 100) * 10000
+            close_trade(sym, trade, price_eod, pnl_pct, pnl_usd, "EOD")
+
+    # ── PASO 2: Calcular resumen con todos los trades ──────────────
     trades_hoy = sb_select("trades", params={"date": f"eq.{today_iso}", "status": "eq.CLOSED", "select": "*"}) or []
     if not trades_hoy:
         log("Sin trades cerrados hoy para el resumen", "INFO")
