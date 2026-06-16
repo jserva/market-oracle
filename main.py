@@ -11,7 +11,11 @@ FLUJO DIARIO:
   22:05 España → Resumen diario en consola
 """
 
-import os, time, json, requests, schedule
+import os, sys, time, json, requests
+try:
+    import schedule
+except ImportError:
+    schedule = None  # No se usa en el loop propio
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
@@ -571,18 +575,18 @@ def task_monitor():
         # ── Detectar TARGET o STOP ──────────────────────────────────
         exit_reason = None
         if is_long:
-            if price >= trade["target2"]:
+            if trade.get("target2") and price >= trade["target2"]:
                 exit_reason = "TARGET2"
-            elif price >= trade["target1"]:
+            elif trade.get("target1") and price >= trade["target1"]:
                 exit_reason = "TARGET1"
-            elif price <= trade["stop"]:
+            elif trade.get("stop") and price <= trade["stop"]:
                 exit_reason = "STOP"
         else:  # short
-            if price <= trade["target2"]:
+            if trade.get("target2") and price <= trade["target2"]:
                 exit_reason = "TARGET2"
-            elif price <= trade["target1"]:
+            elif trade.get("target1") and price <= trade["target1"]:
                 exit_reason = "TARGET1"
-            elif price >= trade["stop"]:
+            elif trade.get("stop") and price >= trade["stop"]:
                 exit_reason = "STOP"
 
         if exit_reason:
