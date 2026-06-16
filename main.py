@@ -689,30 +689,74 @@ def main():
     log("═" * 55)
     log("MARKET ORACLE — Railway Cloud Worker")
     log(f"Zona horaria: Europa/Madrid")
-    log(f"Análisis diario: 15:25 (5 min antes apertura) | Apertura: 15:30 | Cierre: 22:00")
-    log(f"Supabase: {'✓ CONECTADO' if SUPABASE_URL else '✗ NO CONFIGURADO'}")
-    log(f"Anthropic: {'✓ OK' if ANTHROPIC_KEY else '✗ FALTA KEY'}")
+    log(f"Análisis: 15:25 | Apertura: 15:30 | Cierre: 22:00 | Monitor: c/2 min")
+    log(f"Supabase: {\'✓ CONECTADO\' if SUPABASE_URL else \'✗ NO CONFIGURADO\'}")
+    log(f"Anthropic: {\'✓ OK\' if ANTHROPIC_KEY else \'✗ FALTA KEY\'}")
     log("═" * 55)
 
     import sys
     run_now = "--ahora" in sys.argv or os.environ.get("RUN_ON_START","").lower() == "true"
     if run_now:
-        log("▶ Ejecutando análisis AHORA...")
+        log("▶ Ejecutando análisis AHORA (RUN_ON_START)...")
         task_analysis()
         if "--ahora" in sys.argv:
             return
-        log("✓ Análisis completado — arrancando scheduler normal...")
+        log("✓ Análisis completado — arrancando loop...")
 
-    if "--test-monitor" in sys.argv:
-        log("▶ Test de monitoreo...")
-        task_monitor()
-        return
+    # ── Variables de control ────────────────────────────────────────
+    last_analysis_date  = None
+    last_open_date      = None
+    last_summary_date   = None
+    last_heartbeat_min  = -1
+    last_monitor_min    = -1
 
-    setup_schedule()
-    log(f"Scheduler activo. Próxima ejecución: {schedule.next_run()}", "OK")
+    now0 = datetime.now(TZ_SPAIN)
+    log(f"▶ Loop activo — hora España: {now0.strftime(\'%d/%m/%Y %H:%M:%S\')}", "OK")
+    log(f"▶ Día de mercado: {now0.weekday() < 5} (0=Lun … 4=Vie, hoy={now0.weekday()})", "OK")
 
     while True:
-        schedule.run_pending()
+        try:
+            now = datetime.now(TZ_SPAIN)
+            today = now.date()
+            wd = now.weekday()   # 0=Lun … 4=Vie … 6=Dom
+            h, m = now.hour, now.minute
+
+            # ── Solo L-V (días de mercado americano) ───────────────
+            if wd < 5:
+
+                # 15:25-15:29 → Análisis pre-market (una vez por día)
+                if h == 15 and 25 <= m < 30 and last_analysis_date != today:
+                    last_analysis_date = today
+                    log(f"⏰ {now.strftime(\'%H:%M\')} — INICIANDO ANÁLISIS PRE-MARKET")
+                    guarded(task_analysis)()
+
+                # 15:30-15:34 → Apertura mercado (una vez por día)
+                if h == 15 and 30 <= m < 35 and last_open_date != today:
+                    last_open_date = today
+                    log(f"⏰ {now.strftime(\'%H:%M\')} — APERTURA MERCADO")
+                    guarded(task_market_open)()
+
+                # 15:32-22:00 → Monitoreo cada 2 min
+                en_sesion = (h > 15 or (h == 15 and m >= 32)) and h < 22
+                if en_sesion and m % 2 == 0 and m != last_monitor_min:
+                    last_monitor_min = m
+                    guarded(task_monitor)()
+
+                # 22:00-22:14 → Cierre + resumen (una vez por día)
+                if h == 22 and 0 <= m < 15 and last_summary_date != today:
+                    last_summary_date = today
+                    log(f"⏰ {now.strftime(\'%H:%M\')} — CIERRE MERCADO + RESUMEN DIARIO")
+                    guarded(task_daily_summary)()
+
+            # ── Heartbeat cada 30 min (siempre, para verificar que vive) ─
+            if m % 30 == 0 and m != last_heartbeat_min:
+                last_heartbeat_min = m
+                dia = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"][wd]
+                log(f"💓 Heartbeat {dia} {now.strftime(\'%d/%m %H:%M\')} España | mercado={wd<5}")
+
+        except Exception as e:
+            log(f"❌ Error loop principal: {e}", "ERR")
+
         time.sleep(20)
 
 if __name__ == "__main__":
