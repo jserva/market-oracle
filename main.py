@@ -3,12 +3,13 @@
 Market Oracle — Railway Cloud Worker
 Autor: generado por Claude para Juan Rafael
 
-FLUJO DIARIO:
-  15:25 España → Análisis pre-market + guarda recomendaciones en Supabase (9:25 AM ET)
-  15:30 España → Mercado abre → entra en trades recomendados (paper)
-  15:30-22:00  → Cada 5 min revisa precios → detecta target/stop
-  22:00 España → Cierra posiciones abiertas → guarda P&L del día
-  22:05 España → Resumen diario en consola
+FLUJO DIARIO (hora España / hora ET):
+  15:25 / 9:25  → Análisis pre-market con IA + precios Twelve Data reales
+  15:30 / 9:30  → Apertura: entradas a precio real de mercado
+  c/2 min       → Monitor: detecta TARGET1, TARGET2, STOP → cierra con P&L
+  22:00 / 16:00 → Cierre EOD: cierra todas las posiciones abiertas
+  22:00-22:14   → Resumen diario guardado en Supabase
+  Capital: $10,000 por trade | WIN: P&L>$50 | LOSS: P&L<-$50 | SCRATCH: resto
 """
 
 import os, sys, time, json, requests
@@ -116,6 +117,24 @@ def sb(method, table, data=None, params=None):
 
 def sb_insert(table, data):
     return sb("post", table, data)
+
+def sb_upsert(table, data, on_conflict="date"):
+    """INSERT con ON CONFLICT UPDATE — evita errores de duplicado"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": f"return=representation,resolution=merge-duplicates"
+    }
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    try:
+        r = requests.post(url, headers=headers, json=data, timeout=15)
+        return r.json() if r.ok and r.text else None
+    except Exception as e:
+        log(f"Supabase upsert error ({table}): {e}", "ERR")
+        return None
 
 def sb_update(table, data, match_col, match_val):
     return sb("patch", table, data, params={match_col: f"eq.{match_val}"})
@@ -339,7 +358,7 @@ def task_analysis():
 
         # Guardar análisis diario en Supabase
         today_iso = date.today().isoformat()
-        da_result = sb_insert("daily_analysis", {
+        da_result = sb_upsert("daily_analysis", {
             "date": today_iso,
             "analysis_time": datetime.now(TZ_SPAIN).isoformat(),
             "vix": analysis.get("vix"),
@@ -698,7 +717,7 @@ def task_daily_summary():
     scratches = total - wins - losses
     best = max(trades_hoy, key=lambda t: t.get("pnl_usd",0) or 0, default={})
     worst = min(trades_hoy, key=lambda t: t.get("pnl_usd",0) or 0, default={})
-    ds_result = sb_insert("daily_summary", {
+    ds_result = sb_upsert("daily_summary", {
         "date": today_iso,
         "total_trades": total,
         "wins": wins,
