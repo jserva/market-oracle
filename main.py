@@ -503,6 +503,31 @@ def task_monitor():
         is_long = trade["dir"] == "long"
         entry = trade.get("actual_entry") or trade["entry"]
 
+        # ── PENDING pasado el open window (15:34): procesar como market_open ─
+        if trade["status"] == "PENDING":
+            now_et = datetime.now(TZ_ET)
+            past_open = now_et.hour > 9 or (now_et.hour == 9 and now_et.minute >= 34)
+            if past_open and price:
+                strategy = trade.get("strategy", "open")
+                if strategy == "open":
+                    trade["actual_entry"] = price
+                    trade["shares"] = round(10000 / price, 4)
+                    trade["status"] = "ACTIVE"
+                    if trade.get("id"):
+                        sb_update("trades", {"actual_entry_price": price, "entry_time": datetime.now(TZ_SPAIN).isoformat(), "status": "ACTIVE"}, "id", trade["id"])
+                    log(f"▲ {sym} ENTRADA (post-open) en ${price:.2f} | {trade['shares']:.2f} acc | $10,000", "MONEY")
+                elif strategy == "wait15":
+                    trade["status"] = "WAITING"
+                    if trade.get("id"):
+                        sb_update("trades", {"status": "WAITING"}, "id", trade["id"])
+                    log(f"⏱ {sym} → WAITING (wait15)", "INFO")
+                elif strategy == "wait_retrace":
+                    trade["status"] = "WAITING_RETRACE"
+                    if trade.get("id"):
+                        sb_update("trades", {"status": "WAITING_RETRACE"}, "id", trade["id"])
+                    log(f"⏳ {sym} → WAITING_RETRACE a ${trade['entry']:.2f}", "INFO")
+            continue
+
         # ── Gestionar entradas pendientes ──────────────────────────
         if trade["status"] == "WAITING":
             # wait15: entrar si ya pasaron 15 min y precio cerca de entrada
@@ -729,6 +754,38 @@ def setup_schedule():
 
 # ─── MAIN ─────────────────────────────────────────────────────────
 
+def reload_trades_from_supabase():
+    """Recarga desde Supabase los trades de hoy que NO están cerrados (por restart)"""
+    global active_trades
+    today_iso = date.today().isoformat()
+    pendientes = sb_select("trades", params={
+        "date": f"eq.{today_iso}",
+        "select": "*"
+    }) or []
+    # Filtrar solo los no cerrados
+    abiertos = [t for t in pendientes if t.get("status") not in ("CLOSED",)]
+    if not abiertos:
+        log("Sin trades abiertos de hoy para recargar", "INFO")
+        return
+    for t in abiertos:
+        sym = t.get("ticker")
+        if not sym or sym in active_trades:
+            continue
+        active_trades[sym] = {
+            "id": t["id"],
+            "dir": t.get("direction", "long"),
+            "entry": float(t.get("rec_entry_price") or 0),
+            "target1": float(t.get("rec_target1") or 0),
+            "target2": float(t.get("rec_target2") or 0),
+            "stop": float(t.get("rec_stop") or 0),
+            "strategy": t.get("entry_strategy", "open"),
+            "status": t.get("status", "PENDING"),
+            "actual_entry": float(t.get("actual_entry_price") or 0) or None,
+            "shares": round(10000 / float(t.get("actual_entry_price") or t.get("rec_entry_price") or 1), 4)
+        }
+    log(f"Recargados {len(abiertos)} trades de Supabase: {[t['ticker'] for t in abiertos]}", "OK")
+
+
 def main():
     log("=" * 55)
     log("MARKET ORACLE — Railway Cloud Worker")
@@ -756,6 +813,9 @@ def main():
     now0 = datetime.now(TZ_SPAIN)
     log(f"Loop activo — hora Espana: {now0.strftime('%d/%m/%Y %H:%M:%S')}", "OK")
     log(f"Dia semana: {now0.weekday()} (0=Lun 4=Vie 5=Sab 6=Dom) | mercado={now0.weekday() < 5}", "OK")
+
+    # Recargar trades activos de hoy desde Supabase (por si hubo restart)
+    reload_trades_from_supabase()
 
     while True:
         try:
