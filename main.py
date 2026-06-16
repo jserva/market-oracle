@@ -11,7 +11,8 @@ FLUJO DIARIO:
   22:05 España → Resumen diario en consola
 """
 
-import os, time, json, requests, schedule
+import os, sys, time, json, requests, schedule
+os.environ["PYTHONUNBUFFERED"] = "1"
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
