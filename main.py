@@ -254,31 +254,58 @@ def get_current_price(sym):
 
 # ─── CLAUDE ───────────────────────────────────────────────────────
 def parse_json(text):
+    """Extrae y parsea JSON de la respuesta de Claude con múltiples intentos"""
     text = text.replace("```json","").replace("```","").strip()
+    # Buscar el JSON más completo (desde primer { hasta último })
     s, e = text.find("{"), text.rfind("}")
-    if s == -1: raise ValueError(f"Sin JSON en respuesta")
-    return json.loads(text[s:e+1])
+    if s == -1 or e == -1 or e <= s:
+        raise ValueError("Sin JSON válido en respuesta")
+    candidate = text[s:e+1]
+    # Intentar parsear; si falla limpiar caracteres problemáticos
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # Limpiar y reintentar
+        cleaned = candidate.replace("\n", " ").replace("\t", " ")
+        # Eliminar trailing commas antes de } o ]
+        import re
+        cleaned = re.sub(r',\s*([}\]])', r'', cleaned)
+        return json.loads(cleaned)
 
 def call_claude(system, user, max_tokens=8000):
     if not ANTHROPIC_KEY:
         raise ValueError("Falta ANTHROPIC_KEY como variable de entorno en Railway")
-    r = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01"},
-        json={
-            "model": "claude-sonnet-4-5",
-            "max_tokens": max_tokens,
-            "tools": [{"type":"web_search_20250305","name":"web_search"}],
-            "system": system,
-            "messages": [{"role":"user","content":user}]
-        },
-        timeout=120
-    )
-    if not r.ok:
-        raise Exception(f"HTTP {r.status_code}: {r.json().get('error',{}).get('message','')}")
-    data = r.json()
-    text = "".join(b["text"] for b in data.get("content",[]) if b["type"]=="text")
-    return parse_json(text)
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01"},
+                json={
+                    "model": "claude-sonnet-4-5",
+                    "max_tokens": max_tokens,
+                    "tools": [{"type":"web_search_20250305","name":"web_search"}],
+                    "system": system,
+                    "messages": [{"role":"user","content":user}]
+                },
+                timeout=120
+            )
+            if not r.ok:
+                raise Exception(f"HTTP {r.status_code}: {r.json().get('error',{}).get('message','')}")
+            data = r.json()
+            # Extraer texto de todos los bloques text
+            text = "".join(b["text"] for b in data.get("content",[]) if b.get("type")=="text")
+            result = parse_json(text)
+            # Validar que el JSON no esté vacío
+            if result and len(result) > 1:
+                return result
+            log(f"JSON vacío en intento {attempt+1}, reintentando...", "WARN")
+            time.sleep(3)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            log(f"call_claude intento {attempt+1} falló: {e} — reintentando...", "WARN")
+            time.sleep(5)
+    raise ValueError("call_claude: 3 intentos fallidos")
 
 # ─── PROMPTS ──────────────────────────────────────────────────────
 SCREENER_PROMPT = """Eres un screener bursatil. Busca en Yahoo Finance las acciones mas activas hoy.
@@ -343,7 +370,28 @@ def task_analysis():
         today = datetime.now(TZ_SPAIN).strftime("%A %d de %B %Y")
         # Fase 1: Screener
         log("Fase 1/4: Yahoo Finance screener...")
-        sc = call_claude(SCREENER_PROMPT, f"Hoy {today}. Busca movers. Solo JSON con {{", 3000)
+        try:
+            sc = call_claude(SCREENER_PROMPT, f"Hoy {today}. Busca movers. Solo JSON con {{", 3000)
+            if not sc or len(sc.get("c", [])) == 0:
+                raise ValueError("Screener sin candidatos")
+        except Exception as sc_err:
+            log(f"Screener falló ({sc_err}), usando fallback de mercado activo", "WARN")
+            # Fallback: tickers activos estándar para análisis
+            sc = {
+                "at": f"{now.strftime('%H:%M')} ET",
+                "es": "0%", "nq": "0%", "vix": "18", "bias": "neutral",
+                "c": [
+                    {"t":"NVDA","n":"NVIDIA Corp","ch":"0%","w":"AI leader alta volatilidad","cat":"active"},
+                    {"t":"AMD","n":"Advanced Micro Devices","ch":"0%","w":"Semiconductores activo","cat":"active"},
+                    {"t":"TSLA","n":"Tesla Inc","ch":"0%","w":"EV volatilidad alta","cat":"active"},
+                    {"t":"AAPL","n":"Apple Inc","ch":"0%","w":"Mega cap activo","cat":"active"},
+                    {"t":"META","n":"Meta Platforms","ch":"0%","w":"AI momentum","cat":"active"},
+                    {"t":"AMZN","n":"Amazon","ch":"0%","w":"Tech activo","cat":"active"},
+                    {"t":"MSFT","n":"Microsoft","ch":"0%","w":"Cloud AI","cat":"active"},
+                    {"t":"GOOGL","n":"Alphabet","ch":"0%","w":"Search AI","cat":"active"},
+                ],
+                "earn": [], "news": "Mercado en sesion normal"
+            }
         tickers = [c["t"] for c in sc.get("c",[]) if c.get("t")]
         log(f"→ {len(tickers)} candidatas: {', '.join(tickers)}", "OK")
 
