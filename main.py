@@ -183,37 +183,59 @@ def fmp_get(path):
     except:
         return None
 
-def get_fmp(tickers):
-    today = date.today().isoformat()
-    res = {}
-    earnings = fmp_get(f"/v3/earning_calendar?from={today}&to={today}") or []
-    upgrades = (fmp_get("/v4/upgrades-downgrades?page=0") or [])[:30]
-    em = {e["symbol"]: e for e in earnings}
-    um = {}
-    for u in upgrades:
-        um.setdefault(u["symbol"], []).append(u)
-    for sym in tickers[:8]:
-        try:
-            q = (fmp_get(f"/v3/quote/{sym}") or [{}])[0]
-            ins = (fmp_get(f"/v4/insider-trading?symbol={sym}&page=0") or [])[:3]
-            e, u = em.get(sym), um.get(sym, [{}])
-            res[sym] = {
-                "price": q.get("price"),
-                "changePct": f"{q.get('changesPercentage',0):.2f}%",
-                "cap": f"{q.get('marketCap',0)/1e9:.1f}B" if q.get("marketCap") else None,
-                "hasEarnings": bool(e),
-                "earnTime": e.get("time") if e else None,
-                "epsEst": e.get("epsEstimated") if e else None,
-                "action": u[0].get("action") if u[0] else None,
-                "firm": u[0].get("gradingCompany") if u[0] else None,
-                "fromGrade": u[0].get("previousGrade") if u[0] else None,
-                "toGrade": u[0].get("newGrade") if u[0] else None,
-                "insideBuy": any("buy" in (i.get("transactionType","")).lower() for i in ins),
-            }
-        except:
-            res[sym] = None
-    res["_today"] = ", ".join(e["symbol"] for e in earnings) or "ninguno"
-    return res
+def get_fmp(sym):
+    """
+    Datos fundamentales: earnings próximos, noticias, estadísticas.
+    FMP bloqueó endpoints legacy → usamos Polygon + Twelve Data.
+    """
+    result = {
+        "upcoming_earnings": False,
+        "earnings_date": None,
+        "upgrades": [],
+        "insider_activity": "neutral",
+        "news_headlines": [],
+    }
+    try:
+        # 1. Próximos earnings via Twelve Data
+        r_earn = requests.get(
+            f"https://api.twelvedata.com/earnings?symbol={sym}&apikey={TWELVE_KEY}",
+            timeout=8)
+        if r_earn.ok:
+            earnings = r_earn.json().get("earnings", [])
+            today_iso = date.today().isoformat()
+            for e in earnings[:5]:
+                edate = e.get("date", "")
+                if edate and edate >= today_iso:
+                    result["upcoming_earnings"] = True
+                    result["earnings_date"] = edate
+                    break
+    except:
+        pass
+    try:
+        # 2. Noticias recientes via Polygon
+        r_news = requests.get(
+            f"https://api.polygon.io/v2/reference/news?ticker={sym}&limit=5&apiKey={POLYGON_KEY}",
+            timeout=8)
+        if r_news.ok:
+            news = r_news.json().get("results", [])
+            result["news_headlines"] = [n.get("title","") for n in news[:3]]
+    except:
+        pass
+    try:
+        # 3. Estadísticas clave via Twelve Data
+        r_stat = requests.get(
+            f"https://api.twelvedata.com/statistics?symbol={sym}&apikey={TWELVE_KEY}",
+            timeout=8)
+        if r_stat.ok:
+            stats = r_stat.json().get("statistics", {})
+            valuations = stats.get("valuations_metrics", {})
+            financials  = stats.get("financials", {})
+            result["pe_ratio"]      = valuations.get("trailing_pe")
+            result["revenue_growth"]= financials.get("income_statement", {}).get("revenue_growth")
+    except:
+        pass
+    return result
+
 
 def get_current_price(sym):
     """Precio actual via Twelve Data /price (tiempo real) con fallback a FMP"""
