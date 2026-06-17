@@ -185,55 +185,44 @@ def fmp_get(path):
 
 def get_fmp(sym):
     """
-    Datos fundamentales: earnings próximos, noticias, estadísticas.
-    FMP bloqueó endpoints legacy → usamos Polygon + Twelve Data.
+    Datos complementarios: noticias + indicadores técnicos.
+    Fuentes: Polygon (noticias) + Twelve Data (RSI/MACD) + Polygon (ticker details).
+    FMP fue reemplazado — sus endpoints legacy no funcionan con el plan gratuito.
     """
     result = {
         "upcoming_earnings": False,
-        "earnings_date": None,
-        "upgrades": [],
-        "insider_activity": "neutral",
-        "news_headlines": [],
+        "earnings_date":     None,
+        "news_headlines":    [],
+        "rsi":               None,
+        "analyst_rating":    "neutral",
     }
     try:
-        # 1. Próximos earnings via Twelve Data
-        r_earn = requests.get(
-            f"https://api.twelvedata.com/earnings?symbol={sym}&apikey={TWELVE_KEY}",
-            timeout=8)
-        if r_earn.ok:
-            earnings = r_earn.json().get("earnings", [])
-            today_iso = date.today().isoformat()
-            for e in earnings[:5]:
-                edate = e.get("date", "")
-                if edate and edate >= today_iso:
-                    result["upcoming_earnings"] = True
-                    result["earnings_date"] = edate
-                    break
-    except:
-        pass
-    try:
-        # 2. Noticias recientes via Polygon
-        r_news = requests.get(
+        # Noticias recientes (Polygon)
+        r = requests.get(
             f"https://api.polygon.io/v2/reference/news?ticker={sym}&limit=5&apiKey={POLYGON_KEY}",
             timeout=8)
-        if r_news.ok:
-            news = r_news.json().get("results", [])
-            result["news_headlines"] = [n.get("title","") for n in news[:3]]
-    except:
-        pass
+        if r.ok:
+            result["news_headlines"] = [n.get("title","") for n in r.json().get("results",[])[:3]]
+    except: pass
     try:
-        # 3. Estadísticas clave via Twelve Data
-        r_stat = requests.get(
-            f"https://api.twelvedata.com/statistics?symbol={sym}&apikey={TWELVE_KEY}",
+        # RSI diario (Twelve Data) — gratis
+        r = requests.get(
+            f"https://api.twelvedata.com/rsi?symbol={sym}&interval=1day&time_period=14&outputsize=1&apikey={TWELVE_KEY}",
             timeout=8)
-        if r_stat.ok:
-            stats = r_stat.json().get("statistics", {})
-            valuations = stats.get("valuations_metrics", {})
-            financials  = stats.get("financials", {})
-            result["pe_ratio"]      = valuations.get("trailing_pe")
-            result["revenue_growth"]= financials.get("income_statement", {}).get("revenue_growth")
-    except:
-        pass
+        if r.ok:
+            vals = r.json().get("values", [])
+            result["rsi"] = float(vals[0]["rsi"]) if vals else None
+    except: pass
+    try:
+        # Ticker details — sector/industria (Polygon)
+        r = requests.get(
+            f"https://api.polygon.io/v3/reference/tickers/{sym}?apiKey={POLYGON_KEY}",
+            timeout=8)
+        if r.ok:
+            res = r.json().get("results", {})
+            result["sector"]   = res.get("sic_description","")
+            result["market_cap"]= res.get("market_cap")
+    except: pass
     return result
 
 
