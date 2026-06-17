@@ -48,6 +48,14 @@ def get_realtime_prices(tickers):
         # Si es un solo ticker devuelve dict directo, si son varios devuelve {sym: {price:...}}
         if len(tickers) == 1:
             price_data = {tickers[0]: price_data}
+        # Si TD devuelve error global (rate limit), reintentar una vez
+        if isinstance(price_data, dict) and price_data.get("code"):
+            log(f"TD rate limit en batch, esperando 5s y reintentando...", "WARN")
+            time.sleep(5)
+            r1 = requests.get(url_price, headers={"User-Agent": "market-oracle"}, timeout=15)
+            price_data = r1.json()
+            if len(tickers) == 1:
+                price_data = {tickers[0]: price_data}
 
         # /quote para prev_close y open (datos del día)
         url_quote = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
@@ -284,14 +292,18 @@ def build_prompt(poly, fmp):
                    for s,d in poly.items() if d) or "n/d"
     fc_lines = []
     for s,d in fmp.items():
-        if not d or s=="_today": continue
-        l=[f"{s}:${d.get('price','?')} {d.get('changePct','?')} cap={d.get('cap','?')}"]
-        if d.get("hasEarnings"): l.append(f"  EARNINGS HOY {d.get('earnTime','?')} EPS=${d.get('epsEst','?')}")
-        if d.get("action"): l.append(f"  ANALYST:{d.get('firm','?')} {d.get('action','?')} {d.get('fromGrade','?')}->{d.get('toGrade','?')}")
-        if d.get("insideBuy"): l.append("  INSIDER_BUY")
+        if not d or not isinstance(d, dict): continue
+        l = [f"{s}: RSI={d.get('rsi','?')}"]
+        if d.get("upcoming_earnings"):
+            l.append(f"  EARNINGS próximos: {d.get('earnings_date','?')}")
+        news = d.get("news_headlines", [])
+        if news:
+            l.append(f"  NOTICIAS: {' | '.join(news[:2])}")
+        if d.get("market_cap"):
+            l.append(f"  MarketCap={d.get('market_cap')}")
         fc_lines.append("\n".join(l))
     fc_joined = "\n".join(fc_lines) if fc_lines else "n/d"
-    earnings_today = fmp.get('_today','ninguno')
+    earnings_today = "ver datos individuales"
     return f"""Analista cuantitativo day trading. Selecciona 3 trades para ganar mas 2% hoy.
 
 POLYGON: {pc}
