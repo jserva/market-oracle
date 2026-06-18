@@ -454,6 +454,10 @@ def task_analysis():
         for t in trades:
             sym = t.get("t","")
             if not sym: continue
+            # Validar que el trade tiene precios definidos
+            if not t.get("entryPrice") or float(t.get("entryPrice", 0)) <= 0:
+                log(f"  {sym}: sin precio de entrada — trade descartado", "WARN")
+                continue
             rec_data = {
                 "date": today_iso,
                 "ticker": sym,
