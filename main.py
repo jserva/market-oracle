@@ -656,6 +656,9 @@ def task_monitor():
             continue
 
         # ── Calcular P&L actual ─────────────────────────────────────
+        if not entry or entry <= 0:
+            log(f"{sym}: entry=0, skip monitor", "WARN")
+            continue
         pnl_pct = ((price - entry) / entry * 100) if is_long else ((entry - price) / entry * 100)
         capital = 10000  # $10,000 por trade
         pnl_usd = (pnl_pct / 100) * capital
