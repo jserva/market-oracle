@@ -609,7 +609,7 @@ def task_monitor():
                 strategy = trade.get("strategy", "open")
                 if strategy == "open":
                     trade["actual_entry"] = price
-                    trade["shares"] = round(10000 / price, 4)
+                    trade["shares"] = round(10000 / price, 4) if price and price > 0 else 0
                     trade["status"] = "ACTIVE"
                     if trade.get("id"):
                         sb_update("trades", {"actual_entry_price": price, "entry_time": datetime.now(TZ_SPAIN).isoformat(), "status": "ACTIVE"}, "id", trade["id"])
@@ -643,6 +643,9 @@ def task_monitor():
 
         if trade["status"] == "WAITING_RETRACE":
             # Entrar cuando el precio toca el nivel de entrada recomendado
+            if not trade.get("entry") or trade["entry"] <= 0:
+                log(f"  {sym}: entry=0 en WAITING_RETRACE — saltando", "WARN")
+                continue
             diff_pct = abs(price - trade["entry"]) / trade["entry"] * 100
             if diff_pct <= 0.3:  # dentro del 0.3% del precio objetivo
                 trade["actual_entry"] = trade["entry"]
@@ -872,10 +875,11 @@ def reload_trades_from_supabase():
         sym = t.get("ticker")
         if not sym or sym in active_trades:
             continue
+        entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
         active_trades[sym] = {
             "id": t["id"],
             "dir": t.get("direction", "long"),
-            "entry": float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0),
+            "entry": entry_val,
             "target1": float(t.get("rec_target1") or 0),
             "target2": float(t.get("rec_target2") or 0),
             "stop": float(t.get("rec_stop") or 0),
