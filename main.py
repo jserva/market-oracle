@@ -555,7 +555,7 @@ def task_market_open():
         if strategy == "open":
             # Entrar al precio REAL de apertura (Twelve Data)
             actual_entry = price  # precio real del mercado ahora mismo
-            shares = round(10000 / actual_entry, 4) if actual_entry else 0
+            shares = round(10000 / actual_entry, 4) if actual_entry and actual_entry > 0 else 0 if actual_entry else 0
             trade["actual_entry"] = actual_entry
             trade["shares"] = shares
             trade["status"] = "ACTIVE"
@@ -632,7 +632,7 @@ def task_monitor():
                 trade["status"] = "ACTIVE"
                 if trade.get("id"):
                     sb_update("trades", {"actual_entry_price": actual_entry, "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
-                shares = round(10000 / actual_entry, 4) if actual_entry else 0
+                shares = round(10000 / actual_entry, 4) if actual_entry and actual_entry > 0 else 0 if actual_entry else 0
                 trade["shares"] = shares
                 log(f"{'▲' if is_long else '▼'} {sym} ENTRADA WAIT15 en ${actual_entry:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
             continue
@@ -868,7 +868,7 @@ def reload_trades_from_supabase():
         active_trades[sym] = {
             "id": t["id"],
             "dir": t.get("direction", "long"),
-            "entry": float(t.get("rec_entry_price") or 0),
+            "entry": float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0),
             "target1": float(t.get("rec_target1") or 0),
             "target2": float(t.get("rec_target2") or 0),
             "stop": float(t.get("rec_stop") or 0),
