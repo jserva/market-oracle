@@ -888,12 +888,19 @@ def reload_trades_from_supabase():
         if not sym or sym in active_trades:
             continue
         entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
+        # T1/T2: usar Supabase si están definidos, sino recalcular +2% y +3.5%
+        t1_val = float(t.get("rec_target1") or 0)
+        t2_val = float(t.get("rec_target2") or 0)
+        if entry_val > 0 and (t1_val == 0 or t2_val == 0):
+            t1_val = round(entry_val * 1.02, 2)
+            t2_val = round(entry_val * 1.035, 2)
+            log(f"  {sym}: T1/T2 recalculados en reload — T1=${t1_val} T2=${t2_val}", "INFO")
         active_trades[sym] = {
             "id": t["id"],
             "dir": t.get("direction", "long"),
             "entry": entry_val,
-            "target1": float(t.get("rec_target1") or 0),
-            "target2": float(t.get("rec_target2") or 0),
+            "target1": t1_val,
+            "target2": t2_val,
             "stop": float(t.get("rec_stop") or 0),
             "strategy": t.get("entry_strategy", "open"),
             "status": t.get("status", "PENDING"),
