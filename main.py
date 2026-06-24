@@ -484,7 +484,7 @@ def task_analysis():
                 "entry_strategy": t.get("entryStrategy","open"),
                 "rec_entry_price": t.get("entryPrice",0),
                 "rec_target1": round(float(t.get("entryPrice",0)) * 1.02, 2),   # T1 fijo +2%
-                "rec_target2": round(float(t.get("entryPrice",0)) * 1.035, 2),  # T2 fijo +3.5%
+                "rec_target2": None,  # T2 eliminado — cierre único en T1
                 "rec_stop": t.get("stop",0),
                 "risk_reward": t.get("rr",""),
                 "rsi": t.get("rsi",0),
@@ -517,13 +517,12 @@ def task_analysis():
             # Preparar para seguimiento durante sesión — T1/T2 calculados en código
             entry_p = float(t.get("entryPrice", 0))
             t1_calc = round(entry_p * 1.02, 2)
-            t2_calc = round(entry_p * 1.035, 2)
             active_trades[sym] = {
                 "id": rec_id,
                 "dir": t.get("dir","long"),
                 "entry": entry_p,
                 "target1": t1_calc,
-                "target2": t2_calc,
+                "target2": None,  # eliminado
                 "stop": t.get("stop",0),
                 "strategy": t.get("entryStrategy","open"),
                 "status": "PENDING",
@@ -687,16 +686,12 @@ def task_monitor():
         # ── Detectar TARGET o STOP ──────────────────────────────────
         exit_reason = None
         if is_long:
-            if trade.get("target2") and price >= trade["target2"]:
-                exit_reason = "TARGET2"
-            elif trade.get("target1") and price >= trade["target1"]:
+            if trade.get("target1") and price >= trade["target1"]:
                 exit_reason = "TARGET1"
             elif trade.get("stop") and price <= trade["stop"]:
                 exit_reason = "STOP"
         else:  # short
-            if trade.get("target2") and price <= trade["target2"]:
-                exit_reason = "TARGET2"
-            elif trade.get("target1") and price <= trade["target1"]:
+            if trade.get("target1") and price <= trade["target1"]:
                 exit_reason = "TARGET1"
             elif trade.get("stop") and price >= trade["stop"]:
                 exit_reason = "STOP"
@@ -890,17 +885,15 @@ def reload_trades_from_supabase():
         entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
         # T1/T2: usar Supabase si están definidos, sino recalcular +2% y +3.5%
         t1_val = float(t.get("rec_target1") or 0)
-        t2_val = float(t.get("rec_target2") or 0)
-        if entry_val > 0 and (t1_val == 0 or t2_val == 0):
+        if entry_val > 0 and t1_val == 0:
             t1_val = round(entry_val * 1.02, 2)
-            t2_val = round(entry_val * 1.035, 2)
-            log(f"  {sym}: T1/T2 recalculados en reload — T1=${t1_val} T2=${t2_val}", "INFO")
+            log(f"  {sym}: T1 recalculado en reload — T1=${t1_val}", "INFO")
         active_trades[sym] = {
             "id": t["id"],
             "dir": t.get("direction", "long"),
             "entry": entry_val,
             "target1": t1_val,
-            "target2": t2_val,
+            "target2": None,  # eliminado
             "stop": float(t.get("rec_stop") or 0),
             "strategy": t.get("entry_strategy", "open"),
             "status": t.get("status", "PENDING"),
