@@ -483,8 +483,8 @@ def task_analysis():
                 "counter_news": json.dumps(t.get("counterNews",[])),
                 "entry_strategy": t.get("entryStrategy","open"),
                 "rec_entry_price": t.get("entryPrice",0),
-                "rec_target1": t.get("t1",0),
-                "rec_target2": t.get("t2",0),
+                "rec_target1": round(float(t.get("entryPrice",0)) * 1.02, 2),   # T1 fijo +2%
+                "rec_target2": round(float(t.get("entryPrice",0)) * 1.035, 2),  # T2 fijo +3.5%
                 "rec_stop": t.get("stop",0),
                 "risk_reward": t.get("rr",""),
                 "rsi": t.get("rsi",0),
@@ -514,13 +514,16 @@ def task_analysis():
                 log(f"⚠️  {sym}: INSERT en trades falló — revisa schema Supabase", "WARN")
             rec_id = trade_insert[0]["id"] if trade_insert else None
 
-            # Preparar para seguimiento durante sesión
+            # Preparar para seguimiento durante sesión — T1/T2 calculados en código
+            entry_p = float(t.get("entryPrice", 0))
+            t1_calc = round(entry_p * 1.02, 2)
+            t2_calc = round(entry_p * 1.035, 2)
             active_trades[sym] = {
                 "id": rec_id,
                 "dir": t.get("dir","long"),
-                "entry": t.get("entryPrice",0),
-                "target1": t.get("t1",0),
-                "target2": t.get("t2",0),
+                "entry": entry_p,
+                "target1": t1_calc,
+                "target2": t2_calc,
                 "stop": t.get("stop",0),
                 "strategy": t.get("entryStrategy","open"),
                 "status": "PENDING",
@@ -530,7 +533,7 @@ def task_analysis():
             # Mostrar en consola
             gap_icon = " ⚠️ GAP TRAMPA" if t.get("gapTrap") else ""
             reg_icon = " 🏛" if t.get("regulatoryRisk") else ""
-            log(f"{'▲' if t.get('dir')=='long' else '▼'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${t.get('entryPrice',0)} | T1: ${t.get('t1',0)} | Stop: ${t.get('stop',0)}{gap_icon}{reg_icon}", "TRADE")
+            log(f"{'▲' if t.get('dir')=='long' else '▼'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${entry_p} | T1: ${t1_calc} (+2%) | T2: ${t2_calc} (+3.5%) | Stop: ${t.get('stop',0)}{gap_icon}{reg_icon}", "TRADE")
             if t.get("entryCondition"):
                 log(f"  → {t.get('entryCondition','')}", "INFO")
 
