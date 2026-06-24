@@ -483,9 +483,9 @@ def task_analysis():
                 "counter_news": json.dumps(t.get("counterNews",[])),
                 "entry_strategy": t.get("entryStrategy","open"),
                 "rec_entry_price": t.get("entryPrice",0),
-                "rec_target1": round(float(t.get("entryPrice",0)) * 1.02, 2),   # T1 fijo +2%
+                "rec_target1": round(float(t.get("entryPrice",0)) * 1.03, 2),   # T1 fijo +3%
                 "rec_target2": None,  # T2 eliminado — cierre único en T1
-                "rec_stop": t.get("stop",0),
+                "rec_stop": round(float(t.get("entryPrice",0)) * 0.985, 2),  # Stop fijo -1.5%
                 "risk_reward": t.get("rr",""),
                 "rsi": t.get("rsi",0),
                 "pattern": t.get("pat",""),
@@ -516,14 +516,14 @@ def task_analysis():
 
             # Preparar para seguimiento durante sesión — T1/T2 calculados en código
             entry_p = float(t.get("entryPrice", 0))
-            t1_calc = round(entry_p * 1.02, 2)
+            t1_calc = round(entry_p * 1.03, 2)
             active_trades[sym] = {
                 "id": rec_id,
                 "dir": t.get("dir","long"),
                 "entry": entry_p,
                 "target1": t1_calc,
                 "target2": None,  # eliminado
-                "stop": t.get("stop",0),
+                "stop": round(entry_p * 0.985, 2),  # Stop fijo -1.5%
                 "strategy": t.get("entryStrategy","open"),
                 "status": "PENDING",
                 "actual_entry": None
@@ -532,7 +532,8 @@ def task_analysis():
             # Mostrar en consola
             gap_icon = " ⚠️ GAP TRAMPA" if t.get("gapTrap") else ""
             reg_icon = " 🏛" if t.get("regulatoryRisk") else ""
-            log(f"{'▲' if t.get('dir')=='long' else '▼'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${entry_p} | T1: ${t1_calc} (+2%) | T2: ${t2_calc} (+3.5%) | Stop: ${t.get('stop',0)}{gap_icon}{reg_icon}", "TRADE")
+            stop_calc = round(entry_p * 0.985, 2)
+            log(f"{'▲' if t.get('dir')=='long' else '▼'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${entry_p} | T1: ${t1_calc} (+3%) | Stop: ${stop_calc} (-1.5%){gap_icon}{reg_icon}", "TRADE")
             if t.get("entryCondition"):
                 log(f"  → {t.get('entryCondition','')}", "INFO")
 
@@ -886,7 +887,7 @@ def reload_trades_from_supabase():
         # T1/T2: usar Supabase si están definidos, sino recalcular +2% y +3.5%
         t1_val = float(t.get("rec_target1") or 0)
         if entry_val > 0 and t1_val == 0:
-            t1_val = round(entry_val * 1.02, 2)
+            t1_val = round(entry_val * 1.03, 2)
             log(f"  {sym}: T1 recalculado en reload — T1=${t1_val}", "INFO")
         active_trades[sym] = {
             "id": t["id"],
