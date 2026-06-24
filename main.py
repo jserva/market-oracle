@@ -344,7 +344,7 @@ BLOQUES OBLIGATORIOS POR ACCION:
 4-RIESGO REGULATORIO: proyectos federales subsidios litigios -8pts
 5-TECNICOS: RSI14 EMA9/20 soporte resistencia patron volumen
 6-OPCIONES/SHORT: PCR IV unusual short_float days_to_cover
-7-ENTRADA PRECISA: gap<3%=open gap3-5%=wait15 gap>5%=wait_retrace con precio exacto. OBLIGATORIO: si no puedes calcular entryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0tryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0
+7-ENTRADA PRECISA: gap<3%=open gap3-5%=wait15 gap>5%=wait_retrace con precio exacto. OBLIGATORIO: si no puedes calcular entryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0. CRITICO: si usas wait_retrace el entryPrice DEBE estar dentro del rango intraday real (maximo 5% por debajo del precio actual). Si el retroceso necesario es mayor al 5% desde precio actual=descarta el ticker, el gap ya esta quemado y no hay setup valido.
 
 PROBABILIDAD: cat(25)+tech(20)+vol(15)+sec(10)+opt(10)+mac(8)+atr(7)+sho(5)
 DESCUENTOS AUTOMATICOS: gap quemado=-15pts contra_noticia=-10pts riesgo_reg=-8pts
