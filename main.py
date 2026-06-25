@@ -446,15 +446,16 @@ def task_analysis():
             if not t.get("entryPrice") or float(t.get("entryPrice", 0)) <= 0:
                 log(f"  {sym}: sin precio de entrada — trade descartado", "WARN")
                 continue
-            # Validar wait_retrace: entryPrice no puede estar más de 5% por debajo del precio actual
-            if t.get("entryStrategy") == "wait_retrace":
-                precio_actual = float(td_prices.get(sym, {}).get("current") or 0)
-                entry_price = float(t.get("entryPrice", 0))
-                if precio_actual > 0 and entry_price > 0:
-                    diff_pct = (precio_actual - entry_price) / precio_actual * 100
-                    if diff_pct > 5:
-                        log(f"  {sym}: wait_retrace requiere caída {diff_pct:.1f}% — gap quemado, descartado", "WARN")
-                        continue
+            # Ajustar entryPrice: si el precio actual supera la entrada en más del 2%,
+            # recalcular entrada como precio_actual - 1.5% (pullback realista)
+            precio_actual = float(td_prices.get(sym, {}).get("current") or 0)
+            entry_price = float(t.get("entryPrice", 0))
+            if precio_actual > 0 and entry_price > 0:
+                diff_pct = (precio_actual - entry_price) / precio_actual * 100
+                if diff_pct > 2:
+                    entry_ajustada = round(precio_actual * 0.985, 2)  # pullback -1.5% desde actual
+                    log(f"  {sym}: entrada ajustada ${entry_price} → ${entry_ajustada} (pullback 1.5% desde ${precio_actual})", "INFO")
+                    t["entryPrice"] = entry_ajustada
             rec_data = {
                 "date": today_iso,
                 "ticker": sym,
