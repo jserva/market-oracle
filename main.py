@@ -34,75 +34,47 @@ TZ_ET    = ZoneInfo("America/New_York")
 TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
 
 def get_realtime_prices(tickers):
-    """Obtiene precios: batch TD primero, fallback Polygon /prev por ticker"""
+    """Obtiene precios reales uno por uno via Twelve Data respetando rate limit 8/min"""
     if not tickers:
         return {}
     results = {}
 
-    # Intento 1: Twelve Data batch (una sola llamada)
-    try:
-        symbols = ",".join(tickers[:8])
-        r = requests.get(
-            f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}",
-            headers={"User-Agent": "market-oracle"}, timeout=15
-        )
-        price_data = r.json()
-        if len(tickers) == 1:
-            price_data = {tickers[0]: price_data}
-        # Si rate limit, esperar 65s y reintentar una vez
-        if isinstance(price_data, dict) and price_data.get("code") in [429, "429"]:
-            log("TD rate limit — esperando 65s...", "WARN")
-            time.sleep(65)
+    for i, sym in enumerate(tickers[:8]):
+        try:
             r = requests.get(
-                f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}",
-                headers={"User-Agent": "market-oracle"}, timeout=15
+                f"https://api.twelvedata.com/price?symbol={sym}&apikey={TWELVE_KEY}",
+                headers={"User-Agent": "market-oracle"}, timeout=10
             )
-            price_data = r.json()
-            if len(tickers) == 1:
-                price_data = {tickers[0]: price_data}
+            data = r.json()
 
-        for sym in tickers:
-            p = price_data.get(sym, {})
-            if isinstance(p, dict) and p.get("price") and not p.get("code"):
-                current = float(p["price"])
-                results[sym] = {"current": current, "prev_close": 0, "open": current, "gap_pct": 0}
-    except Exception as e:
-        log(f"TD batch falló: {e}", "WARN")
+            if isinstance(data, dict) and data.get("price") and not data.get("code"):
+                current = float(data["price"])
 
-    # Fallback: Polygon /prev para los que no tienen precio
-    missing = [s for s in tickers if s not in results]
-    for sym in missing:
-        try:
-            r2 = requests.get(
-                f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
-                timeout=10
-            )
-            d = r2.json()
-            res = d.get("results", [])
-            if res and res[0].get("c"):
-                current = float(res[0]["c"])
-                results[sym] = {"current": current, "prev_close": current, "open": current, "gap_pct": 0}
-                log(f"  {sym}: precio via Polygon /prev ${current}", "INFO")
+                # prev_close via Polygon /prev (cierre ayer — solo para calcular gap)
+                prev_close = 0
+                try:
+                    r2 = requests.get(
+                        f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
+                        timeout=8
+                    )
+                    res = r2.json().get("results", [])
+                    if res:
+                        prev_close = float(res[0].get("c", 0))
+                except:
+                    pass
+
+                gap_pct = round(((current - prev_close) / prev_close * 100), 2) if prev_close else 0
+                results[sym] = {"current": current, "prev_close": prev_close, "open": current, "gap_pct": gap_pct}
+                log(f"  {sym}: ${current} (gap {gap_pct:+.1f}% vs ayer)", "INFO")
+            else:
+                log(f"  {sym}: TD sin precio — {data.get('message','')}", "WARN")
+
+            # Pausa para respetar 8 req/min de Twelve Data
+            if i < len(tickers) - 1:
+                time.sleep(8)
+
         except Exception as e:
-            log(f"  {sym}: sin precio (TD y Polygon fallaron) — {e}", "WARN")
-
-    # Calcular gap_pct y prev_close desde Polygon /prev para los que sí tienen TD
-    for sym in list(results.keys()):
-        try:
-            r3 = requests.get(
-                f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
-                timeout=10
-            )
-            d = r3.json()
-            res = d.get("results", [])
-            if res:
-                prev_close = float(res[0].get("c", 0))
-                open_p = float(res[0].get("o", results[sym]["current"]))
-                current = results[sym]["current"]
-                gap_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
-                results[sym].update({"prev_close": prev_close, "open": open_p, "gap_pct": round(gap_pct, 2)})
-        except:
-            pass
+            log(f"  {sym}: error — {e}", "WARN")
 
     return results
 
