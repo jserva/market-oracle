@@ -13,6 +13,7 @@ FLUJO DIARIO (hora España / hora ET):
 """
 
 import os, sys, time, json, requests
+import yfinance as yf
 try:
     import schedule
 except ImportError:
