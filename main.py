@@ -34,47 +34,53 @@ TZ_ET    = ZoneInfo("America/New_York")
 TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
 
 def get_realtime_prices(tickers):
-    """Obtiene precios reales uno por uno via Twelve Data respetando rate limit 8/min"""
+    """Obtiene precios reales via yfinance — sin API key, sin rate limit"""
     if not tickers:
         return {}
     results = {}
+    try:
+        data = yf.download(tickers, period="1d", interval="1m", progress=False, auto_adjust=True)
+        if data.empty:
+            log("yfinance: sin datos", "WARN")
+            return {}
 
-    for i, sym in enumerate(tickers[:8]):
-        try:
-            r = requests.get(
-                f"https://api.twelvedata.com/price?symbol={sym}&apikey={TWELVE_KEY}",
-                headers={"User-Agent": "market-oracle"}, timeout=10
-            )
-            data = r.json()
+        # Precio actual = último cierre del minuto
+        close = data["Close"] if "Close" in data else data.get("close", None)
+        if close is None:
+            return {}
 
-            if isinstance(data, dict) and data.get("price") and not data.get("code"):
-                current = float(data["price"])
+        latest = close.iloc[-1]
+        prev = close.iloc[0]  # apertura del día como referencia
 
-                # prev_close via Polygon /prev (cierre ayer — solo para calcular gap)
+        # prev_close via Polygon /prev para gap correcto
+        for sym in tickers:
+            try:
+                current = float(latest[sym]) if sym in latest else None
+                if not current or str(current) == 'nan':
+                    continue
+                open_price = float(close.iloc[0][sym]) if sym in close.iloc[0] else current
+
+                # prev_close via Polygon
                 prev_close = 0
                 try:
-                    r2 = requests.get(
+                    r = requests.get(
                         f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
                         timeout=8
                     )
-                    res = r2.json().get("results", [])
+                    res = r.json().get("results", [])
                     if res:
                         prev_close = float(res[0].get("c", 0))
                 except:
                     pass
 
                 gap_pct = round(((current - prev_close) / prev_close * 100), 2) if prev_close else 0
-                results[sym] = {"current": current, "prev_close": prev_close, "open": current, "gap_pct": gap_pct}
-                log(f"  {sym}: ${current} (gap {gap_pct:+.1f}% vs ayer)", "INFO")
-            else:
-                log(f"  {sym}: TD sin precio — {data.get('message','')}", "WARN")
+                results[sym] = {"current": round(current, 4), "prev_close": prev_close, "open": round(open_price, 4), "gap_pct": gap_pct}
+                log(f"  {sym}: ${current:.2f} (gap {gap_pct:+.1f}% vs ayer)", "INFO")
+            except Exception as e:
+                log(f"  {sym}: error procesando — {e}", "WARN")
 
-            # Pausa para respetar 8 req/min de Twelve Data
-            if i < len(tickers) - 1:
-                time.sleep(8)
-
-        except Exception as e:
-            log(f"  {sym}: error — {e}", "WARN")
+    except Exception as e:
+        log(f"yfinance error: {e}", "WARN")
 
     return results
 
