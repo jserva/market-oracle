@@ -34,70 +34,79 @@ TZ_ET    = ZoneInfo("America/New_York")
 TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
 
 def get_realtime_prices(tickers):
-    """Obtiene precio tick-a-tick en tiempo real via Twelve Data /price endpoint"""
+    """Obtiene precios: batch TD primero, fallback Polygon /prev por ticker"""
     if not tickers:
         return {}
     results = {}
+
+    # Intento 1: Twelve Data batch (una sola llamada)
     try:
-        # /price devuelve el último precio de mercado en tiempo real
         symbols = ",".join(tickers[:8])
-        url_price = f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}"
-        r1 = requests.get(url_price, headers={"User-Agent": "market-oracle"}, timeout=15)
-        price_data = r1.json()
-        
-        # Si es un solo ticker devuelve dict directo, si son varios devuelve {sym: {price:...}}
+        r = requests.get(
+            f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}",
+            headers={"User-Agent": "market-oracle"}, timeout=15
+        )
+        price_data = r.json()
         if len(tickers) == 1:
             price_data = {tickers[0]: price_data}
-        # Si TD devuelve error global (rate limit), reintentar una vez
-        if isinstance(price_data, dict) and price_data.get("code"):
-            log(f"TD rate limit en batch, esperando 5s y reintentando...", "WARN")
-            time.sleep(5)
-            r1 = requests.get(url_price, headers={"User-Agent": "market-oracle"}, timeout=15)
-            price_data = r1.json()
+        # Si rate limit, esperar 65s y reintentar una vez
+        if isinstance(price_data, dict) and price_data.get("code") in [429, "429"]:
+            log("TD rate limit — esperando 65s...", "WARN")
+            time.sleep(65)
+            r = requests.get(
+                f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_KEY}",
+                headers={"User-Agent": "market-oracle"}, timeout=15
+            )
+            price_data = r.json()
             if len(tickers) == 1:
                 price_data = {tickers[0]: price_data}
 
-        # /quote para prev_close y open (datos del día)
-        url_quote = f"https://api.twelvedata.com/quote?symbol={symbols}&apikey={TWELVE_KEY}"
-        r2 = requests.get(url_quote, headers={"User-Agent": "market-oracle"}, timeout=15)
-        quote_data = r2.json()
-        if len(tickers) == 1:
-            quote_data = {tickers[0]: quote_data}
-
         for sym in tickers:
-            try:
-                # Precio en tiempo real del /price endpoint
-                p = price_data.get(sym, {})
-                current = float(p.get("price", 0)) if p.get("price") else None
-                if not current:
-                    continue
-
-                # Datos del día del /quote endpoint
-                q = quote_data.get(sym, {})
-                prev_close = float(q.get("previous_close", 0)) if q.get("previous_close") else 0
-                open_price = float(q.get("open", 0)) if q.get("open") else None
-                gap_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
-
-                results[sym] = {
-                    "current": round(current, 2),
-                    "prev_close": round(prev_close, 2),
-                    "open": round(open_price, 2) if open_price else None,
-                    "gap_pct": round(gap_pct, 2),
-                    "source": "realtime"
-                }
-                open_str = f"${open_price:.2f}" if open_price else "N/A"
-                log(f"  {sym}: PRECIO_REAL=${current:.2f} | open={open_str} | prev_close=${prev_close:.2f} | gap={'+' if gap_pct>=0 else ''}{gap_pct:.1f}%")
-            except Exception as e2:
-                log(f"  {sym}: error parseando precio - {e2}", "WARN")
-
-        return results
+            p = price_data.get(sym, {})
+            if isinstance(p, dict) and p.get("price") and not p.get("code"):
+                current = float(p["price"])
+                results[sym] = {"current": current, "prev_close": 0, "open": current, "gap_pct": 0}
     except Exception as e:
-        log(f"Twelve Data error: {e} — usando FMP como fallback", "WARN")
-        return {}
+        log(f"TD batch falló: {e}", "WARN")
+
+    # Fallback: Polygon /prev para los que no tienen precio
+    missing = [s for s in tickers if s not in results]
+    for sym in missing:
+        try:
+            r2 = requests.get(
+                f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
+                timeout=10
+            )
+            d = r2.json()
+            res = d.get("results", [])
+            if res and res[0].get("c"):
+                current = float(res[0]["c"])
+                results[sym] = {"current": current, "prev_close": current, "open": current, "gap_pct": 0}
+                log(f"  {sym}: precio via Polygon /prev ${current}", "INFO")
+        except Exception as e:
+            log(f"  {sym}: sin precio (TD y Polygon fallaron) — {e}", "WARN")
+
+    # Calcular gap_pct y prev_close desde Polygon /prev para los que sí tienen TD
+    for sym in list(results.keys()):
+        try:
+            r3 = requests.get(
+                f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
+                timeout=10
+            )
+            d = r3.json()
+            res = d.get("results", [])
+            if res:
+                prev_close = float(res[0].get("c", 0))
+                open_p = float(res[0].get("o", results[sym]["current"]))
+                current = results[sym]["current"]
+                gap_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
+                results[sym].update({"prev_close": prev_close, "open": open_p, "gap_pct": round(gap_pct, 2)})
+        except:
+            pass
+
+    return results
 
 
-
-# ─── LOGGING ──────────────────────────────────────────────────────
 def log(msg, level="INFO"):
     now = datetime.now(TZ_SPAIN).strftime("%Y-%m-%d %H:%M:%S")
     prefix = {"INFO":"ℹ️","OK":"✅","WARN":"⚠️","ERR":"❌","TRADE":"📊","MONEY":"💰"}
@@ -414,7 +423,7 @@ def task_analysis():
         log("Fase 4/4: Análisis IA (60-90s)...")
         list_str = "; ".join(f"{c['t']} {c.get('ch','')} {c.get('w','')}" for c in sc.get("c",[]))
         td_str = "\n".join(
-            f"{s}: PRECIO_ACTUAL=${d['current']} ({'+' if d['gap_pct']>=0 else ''}{d['gap_pct']}% vs cierre_ayer) [fuente:{d['source']}] prev_close=${d['prev_close']}"
+            f"{s}: PRECIO_ACTUAL=${d['current']} ({'+' if d['gap_pct']>=0 else ''}{d['gap_pct']}% vs cierre_ayer) prev_close=${d['prev_close']}"
             + (f" open=${d['open']}" if d.get('open') else "")
             + (f" PRE-MARKET=${d['pre_market']}" if d.get('pre_market') else "")
             for s, d in td_prices.items()
