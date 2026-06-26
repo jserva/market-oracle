@@ -585,6 +585,11 @@ def task_market_open():
 def task_monitor():
     """Revisa precios cada 5 min y detecta target/stop"""
     global active_trades
+
+    # Si active_trades está vacío (ej. por restart de Railway), recargar de Supabase
+    if not active_trades:
+        log("active_trades vacío — recargando desde Supabase...", "INFO")
+        reload_trades_from_supabase()
     if not active_trades:
         return
 
@@ -696,6 +701,11 @@ def task_market_close():
     global active_trades
     log("MERCADO CERRADO — Cerrando posiciones abiertas", "TRADE")
 
+    # Recargar desde Supabase por si hubo restart durante el día
+    if not active_trades:
+        log("active_trades vacío en cierre — recargando desde Supabase...", "INFO")
+        reload_trades_from_supabase()
+
     for sym, trade in list(active_trades.items()):
         if trade["status"] != "ACTIVE":
             continue
@@ -737,6 +747,11 @@ def task_daily_summary():
     """Cierra todos los trades abiertos al EOD y guarda el resumen del día"""
     global active_trades
     today_iso = date.today().isoformat()
+
+    # Recargar desde Supabase por si hubo restart durante el día
+    if not active_trades:
+        log("active_trades vacío en daily_summary — recargando desde Supabase...", "INFO")
+        reload_trades_from_supabase()
 
     # ── PASO 1: Cerrar todos los trades que quedaron abiertos ─────
     log("CIERRE EOD — cerrando posiciones abiertas...", "TRADE")
@@ -871,8 +886,9 @@ def reload_trades_from_supabase():
         return
     for t in abiertos:
         sym = t.get("ticker")
-        if not sym or sym in active_trades:
+        if not sym:
             continue
+        # Siempre sobreescribir — Supabase es la fuente de verdad
         entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
         # T1/T2: usar Supabase si están definidos, sino recalcular +2% y +3.5%
         t1_val = float(t.get("rec_target1") or 0)
