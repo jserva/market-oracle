@@ -472,9 +472,9 @@ def task_analysis():
                 "counter_news": json.dumps(t.get("counterNews",[])),
                 "entry_strategy": t.get("entryStrategy","open"),
                 "rec_entry_price": t.get("entryPrice",0),
-                "rec_target1": round(float(t.get("entryPrice",0)) * 1.03, 2),   # T1 fijo +3%
+                "rec_target1": round(float(t.get("entryPrice",0)) * (0.97 if t.get("dir","long")=="short" else 1.03), 2),   # T1: -3% short / +3% long
                 "rec_target2": None,  # T2 eliminado — cierre único en T1
-                "rec_stop": round(float(t.get("entryPrice",0)) * 0.985, 2),  # Stop fijo -1.5%
+                "rec_stop": round(float(t.get("entryPrice",0)) * (1.015 if t.get("dir","long")=="short" else 0.985), 2),  # Stop: +1.5% short / -1.5% long
                 "risk_reward": t.get("rr",""),
                 "rsi": t.get("rsi",0),
                 "pattern": t.get("pat",""),
@@ -505,14 +505,15 @@ def task_analysis():
 
             # Preparar para seguimiento durante sesión — T1/T2 calculados en código
             entry_p = float(t.get("entryPrice", 0))
-            t1_calc = round(entry_p * 1.03, 2)
+            is_short = t.get("dir","long") == "short"
+            t1_calc = round(entry_p * (0.97 if is_short else 1.03), 2)
             active_trades[sym] = {
                 "id": rec_id,
                 "dir": t.get("dir","long"),
                 "entry": entry_p,
                 "target1": t1_calc,
                 "target2": None,  # eliminado
-                "stop": round(entry_p * 0.985, 2),  # Stop fijo -1.5%
+                "stop": round(entry_p * (1.015 if is_short else 0.985), 2),  # Stop: +1.5% short / -1.5% long
                 "strategy": t.get("entryStrategy","open"),
                 "status": "PENDING",
                 "actual_entry": None
@@ -521,8 +522,8 @@ def task_analysis():
             # Mostrar en consola
             gap_icon = " ⚠️ GAP TRAMPA" if t.get("gapTrap") else ""
             reg_icon = " 🏛" if t.get("regulatoryRisk") else ""
-            stop_calc = round(entry_p * 0.985, 2)
-            log(f"{'▲' if t.get('dir')=='long' else '▼'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${entry_p} | T1: ${t1_calc} (+3%) | Stop: ${stop_calc} (-1.5%){gap_icon}{reg_icon}", "TRADE")
+            stop_calc = round(entry_p * (1.015 if is_short else 0.985), 2)
+            log(f"{'▼' if is_short else '▲'} {sym} ({t.get('prob',0)}% {t.get('label','')}) | Entrada: ${entry_p} | T1: ${t1_calc} ({'-3%' if is_short else '+3%'}) | Stop: ${stop_calc} ({'+1.5%' if is_short else '-1.5%'}){gap_icon}{reg_icon}", "TRADE")
             if t.get("entryCondition"):
                 log(f"  → {t.get('entryCondition','')}", "INFO")
 
@@ -680,7 +681,7 @@ def task_monitor():
                 exit_reason = "TARGET1"
             elif trade.get("stop") and price <= trade["stop"]:
                 exit_reason = "STOP"
-        else:  # short
+        else:  # short: gana cuando baja
             if trade.get("target1") and price <= trade["target1"]:
                 exit_reason = "TARGET1"
             elif trade.get("stop") and price >= trade["stop"]:
@@ -875,8 +876,9 @@ def reload_trades_from_supabase():
         entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
         # T1/T2: usar Supabase si están definidos, sino recalcular +2% y +3.5%
         t1_val = float(t.get("rec_target1") or 0)
+        is_short_reload = t.get("direction","long") == "short"
         if entry_val > 0 and t1_val == 0:
-            t1_val = round(entry_val * 1.03, 2)
+            t1_val = round(entry_val * (0.97 if is_short_reload else 1.03), 2)
             log(f"  {sym}: T1 recalculado en reload — T1=${t1_val}", "INFO")
         active_trades[sym] = {
             "id": t["id"],
@@ -884,7 +886,7 @@ def reload_trades_from_supabase():
             "entry": entry_val,
             "target1": t1_val,
             "target2": None,  # eliminado
-            "stop": float(t.get("rec_stop") or 0),
+            "stop": float(t.get("rec_stop") or 0) or round(entry_val * (1.015 if is_short_reload else 0.985), 2),
             "strategy": t.get("entry_strategy", "open"),
             "status": t.get("status", "PENDING"),
             "actual_entry": float(t.get("actual_entry_price") or 0) or None,
