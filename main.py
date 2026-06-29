@@ -4,7 +4,7 @@ Market Oracle — Railway Cloud Worker
 Autor: generado por Claude para Juan Rafael
 
 FLUJO DIARIO (hora España / hora ET):
-  15:25 / 9:25  → Análisis pre-market con IA + precios Twelve Data reales
+  15:25 España (13:25 UTC) / 9:25 ET  → Análisis pre-market con IA
   15:30 / 9:30  → Apertura: entradas a precio real de mercado
   c/2 min       → Monitor: detecta TARGET1, TARGET2, STOP → cierra con P&L
   22:00 / 16:00 → Cierre EOD: cierra todas las posiciones abiertas
@@ -846,28 +846,34 @@ def guarded(fn):
     return wrapper
 
 def setup_schedule():
-    # Análisis pre-market: 15:25 España (9:25 AM ET — 5 min antes apertura)
-    schedule.every().monday.at("15:25").do(guarded(task_analysis))
-    schedule.every().tuesday.at("15:25").do(guarded(task_analysis))
-    schedule.every().wednesday.at("15:25").do(guarded(task_analysis))
-    schedule.every().thursday.at("15:25").do(guarded(task_analysis))
-    schedule.every().friday.at("15:25").do(guarded(task_analysis))
+    # ── HORARIOS EN UTC (Railway corre en UTC) ──────────────────────
+    # España verano UTC+2: hora_UTC = hora_España - 2
+    # 15:25 España = 13:25 UTC  |  15:30 España = 13:30 UTC
+    # 22:00 España = 20:00 UTC  |  22:05 España = 20:05 UTC
+    # Monitor 15:32-21:58 España = 13:32-19:58 UTC
 
-    # Apertura mercado: 15:30 España (9:30 AM ET)
-    schedule.every().day.at("15:30").do(guarded(task_market_open))
+    # Análisis pre-market: 13:25 UTC = 15:25 España = 9:25 AM ET
+    schedule.every().monday.at("13:25").do(guarded(task_analysis))
+    schedule.every().tuesday.at("13:25").do(guarded(task_analysis))
+    schedule.every().wednesday.at("13:25").do(guarded(task_analysis))
+    schedule.every().thursday.at("13:25").do(guarded(task_analysis))
+    schedule.every().friday.at("13:25").do(guarded(task_analysis))
 
-    # Monitoreo cada 2 min durante sesión (15:32 → 21:58)
-    for h in range(15, 22):
+    # Apertura mercado: 13:30 UTC = 15:30 España = 9:30 AM ET
+    schedule.every().day.at("13:30").do(guarded(task_market_open))
+
+    # Monitoreo cada 2 min: 13:32-19:58 UTC = 15:32-21:58 España
+    for h in range(13, 20):
         for m in range(0, 60, 2):
-            if (h == 15 and m < 32) or (h == 21 and m > 58):
+            if (h == 13 and m < 32) or (h == 19 and m > 58):
                 continue
             schedule.every().day.at(f"{h:02d}:{m:02d}").do(guarded(task_monitor))
 
-    # Cierre de mercado: 22:00 España (4:00 PM ET)
-    schedule.every().day.at("22:00").do(guarded(task_market_close))
+    # Cierre de mercado: 20:00 UTC = 22:00 España = 4:00 PM ET
+    schedule.every().day.at("20:00").do(guarded(task_market_close))
 
-    # Resumen final: 22:05
-    schedule.every().day.at("22:05").do(guarded(task_daily_summary))
+    # Resumen final: 20:05 UTC = 22:05 España
+    schedule.every().day.at("20:05").do(guarded(task_daily_summary))
 
 # ─── MAIN ─────────────────────────────────────────────────────────
 
