@@ -996,17 +996,11 @@ def main():
             # Solo L-V (dias de mercado americano)
             if wd < 5:
 
-                # 15:25-15:29 — Analisis pre-market (una vez por dia)
-                if h == 15 and 25 <= m < 30 and last_analysis_date != today:
+                # 15:30-15:34 — Analisis EN APERTURA (una vez por dia, mercado ya abierto)
+                if h == 15 and 30 <= m < 35 and last_analysis_date != today:
                     last_analysis_date = today
-                    log(f"[{now.strftime('%H:%M')}] INICIANDO ANALISIS PRE-MARKET")
+                    log(f"[{now.strftime('%H:%M')}] INICIANDO ANALISIS EN APERTURA")
                     guarded(task_analysis)()
-
-                # 15:30-15:34 — Apertura mercado (una vez por dia)
-                if h == 15 and 30 <= m < 35 and last_open_date != today:
-                    last_open_date = today
-                    log(f"[{now.strftime('%H:%M')}] APERTURA MERCADO")
-                    guarded(task_market_open)()
 
                 # 15:32-21:59 — Monitoreo cada 2 min
                 en_sesion = (h > 15 or (h == 15 and m >= 32)) and h < 22
