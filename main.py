@@ -888,7 +888,7 @@ def guarded(fn):
 def setup_schedule():
     # ── HORARIOS EN UTC (Railway corre en UTC) ──────────────────────
     # España verano UTC+2: hora_UTC = hora_España - 2
-    # 15:25 España = 13:25 UTC  |  15:30 España = 13:30 UTC
+    # 15:30 España = 13:30 UTC = 9:30 AM ET
     # 22:00 España = 20:00 UTC  |  22:05 España = 20:05 UTC
     # Monitor 15:32-21:58 España = 13:32-19:58 UTC
 
