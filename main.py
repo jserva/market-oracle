@@ -580,8 +580,34 @@ def task_analysis():
 
 # ─── TAREA 2: APERTURA MERCADO 15:30 ─────────────────────────────
 def task_market_open():
-    """Registra entradas al abrir el mercado"""
+    """Registra entradas al abrir el mercado — sincroniza Supabase primero"""
     global active_trades
+
+    # Sincronizar desde Supabase antes de procesar apertura
+    today_iso = date.today().isoformat()
+    try:
+        res = sb_query("trades", f"date=eq.{today_iso}&status=eq.PENDING&select=*")
+        if res:
+            for t in res:
+                sym = t.get("ticker")
+                if not sym:
+                    continue
+                entry_val = float(t.get("rec_entry_price") or 0)
+                is_short_r = t.get("direction", "long") == "short"
+                t1_val = float(t.get("rec_target1") or 0) or round(entry_val * (0.97 if is_short_r else 1.03), 2)
+                stop_val = float(t.get("rec_stop") or 0) or round(entry_val * (1.015 if is_short_r else 0.985), 2)
+                if sym not in active_trades:
+                    active_trades[sym] = {
+                        "id": t["id"], "dir": t.get("direction","long"),
+                        "entry": entry_val, "target1": t1_val, "stop": stop_val,
+                        "strategy": t.get("entry_strategy","open"),
+                        "status": "PENDING", "actual_entry": None,
+                        "shares": round(10000 / entry_val, 4) if entry_val > 0 else 0,
+                    }
+            log(f"  → {len(res)} trades PENDING cargados desde Supabase", "OK")
+    except Exception as e:
+        log(f"Sync Supabase en apertura falló: {e}", "WARN")
+
     if not active_trades:
         log("Sin trades activos para este día", "INFO")
         return
@@ -623,13 +649,47 @@ def task_market_open():
 
 # ─── TAREA 3: MONITOREO CADA 2 MIN ───────────────────────────────
 def task_monitor():
-    """Revisa precios cada 5 min y detecta target/stop"""
+    """Revisa precios cada 2 min y detecta target/stop — SIEMPRE lee de Supabase"""
     global active_trades
 
-    # Si active_trades está vacío (ej. por restart de Railway), recargar de Supabase
-    if not active_trades:
-        log("active_trades vacío — recargando desde Supabase...", "INFO")
-        reload_trades_from_supabase()
+    # SIEMPRE sincronizar desde Supabase — fuente de verdad
+    # Así el monitor sobrevive cualquier restart de Railway
+    today_iso = date.today().isoformat()
+    try:
+        res = sb_query("trades", f"date=eq.{today_iso}&status=in.(PENDING,ACTIVE,WAITING,WAITING_RETRACE)&select=*")
+        if res:
+            for t in res:
+                sym = t.get("ticker")
+                if not sym:
+                    continue
+                entry_val = float(t.get("actual_entry_price") or t.get("rec_entry_price") or 0)
+                is_short_r = t.get("direction", "long") == "short"
+                t1_val = float(t.get("rec_target1") or 0)
+                stop_val = float(t.get("rec_stop") or 0)
+                if entry_val > 0 and t1_val == 0:
+                    t1_val = round(entry_val * (0.97 if is_short_r else 1.03), 2)
+                if entry_val > 0 and stop_val == 0:
+                    stop_val = round(entry_val * (1.015 if is_short_r else 0.985), 2)
+                active_trades[sym] = {
+                    "id": t["id"],
+                    "dir": t.get("direction", "long"),
+                    "entry": float(t.get("rec_entry_price") or 0),
+                    "target1": t1_val,
+                    "stop": stop_val,
+                    "strategy": t.get("entry_strategy", "open"),
+                    "status": t.get("status", "PENDING"),
+                    "actual_entry": float(t.get("actual_entry_price") or 0) or None,
+                    "shares": round(10000 / entry_val, 4) if entry_val > 0 else 0,
+                }
+        # Limpiar trades cerrados de memoria
+        for sym in list(active_trades.keys()):
+            if active_trades[sym].get("status") == "CLOSED":
+                del active_trades[sym]
+    except Exception as e:
+        log(f"Sync Supabase en monitor falló: {e} — usando memoria", "WARN")
+        if not active_trades:
+            reload_trades_from_supabase()
+
     if not active_trades:
         return
 
