@@ -4,7 +4,7 @@ Market Oracle — Railway Cloud Worker
 Autor: generado por Claude para Juan Rafael
 
 FLUJO DIARIO (hora España / hora ET):
-  15:25 España (13:25 UTC) / 9:25 ET  → Análisis pre-market con IA
+  15:30 España (13:30 UTC) / 9:30 ET  → Análisis EN APERTURA con IA + volumen real + SPY/QQQ contexto
   15:30 / 9:30  → Apertura: entradas a precio real de mercado
   c/2 min       → Monitor: detecta TARGET1, TARGET2, STOP → cierra con P&L
   22:00 / 16:00 → Cierre EOD: cierra todas las posiciones abiertas
@@ -332,7 +332,7 @@ BLOQUES OBLIGATORIOS POR ACCION:
 4-RIESGO REGULATORIO: proyectos federales subsidios litigios -8pts
 5-TECNICOS: RSI14 EMA9/20 soporte resistencia patron volumen
 6-OPCIONES/SHORT: PCR IV unusual short_float days_to_cover
-7-ENTRADA PRECISA: gap<3%=open gap3-5%=wait15 gap>5%=wait_retrace con precio exacto. OBLIGATORIO: si no puedes calcular entryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0. CRITICO: si usas wait_retrace el entryPrice DEBE estar dentro del rango intraday real (maximo 5% por debajo del precio actual). Si el retroceso necesario es mayor al 5% desde precio actual=descarta el ticker, el gap ya esta quemado y no hay setup valido.
+7-ENTRADA PRECISA: gap<3%=open gap3-5%=wait15 gap>5%=wait_retrace con precio exacto. VOLUMEN: si VOL_RATIO<0.8=BAJO evitar entrada hasta confirmar volumen; si VOL_RATIO>=1.5=FUERTE priorizar trade; incluir condicion de volumen en entryCondition. OBLIGATORIO: si no puedes calcular entryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0. CRITICO: si usas wait_retrace el entryPrice DEBE estar dentro del rango intraday real (maximo 5% por debajo del precio actual). Si el retroceso necesario es mayor al 5% desde precio actual=descarta el ticker, el gap ya esta quemado y no hay setup valido.
 
 PROBABILIDAD: cat(25)+tech(20)+vol(15)+sec(10)+opt(10)+mac(8)+atr(7)+sho(5)
 DESCUENTOS AUTOMATICOS: gap quemado=-15pts contra_noticia=-10pts riesgo_reg=-8pts
@@ -383,6 +383,27 @@ def task_analysis():
         tickers = [c["t"] for c in sc.get("c",[]) if c.get("t")]
         log(f"→ {len(tickers)} candidatas: {', '.join(tickers)}", "OK")
 
+        # Fase 1.5: Contexto SPY/QQQ día anterior
+        log("Fase 1.5/4: Contexto mercado SPY/QQQ...")
+        spy_qqq_ctx = ""
+        try:
+            import yfinance as yf
+            mkt = yf.download(["SPY","QQQ"], period="5d", interval="1d", progress=False)
+            close = mkt["Close"]
+            spy_prev  = float(close["SPY"].dropna().iloc[-2])
+            spy_hoy   = float(close["SPY"].dropna().iloc[-1])
+            qqq_prev  = float(close["QQQ"].dropna().iloc[-2])
+            qqq_hoy   = float(close["QQQ"].dropna().iloc[-1])
+            spy_chg   = (spy_hoy - spy_prev) / spy_prev * 100
+            qqq_chg   = (qqq_hoy - qqq_prev) / qqq_prev * 100
+            spy_qqq_ctx = f"SPY ayer: ${spy_hoy:.2f} ({spy_chg:+.2f}%) | QQQ ayer: ${qqq_hoy:.2f} ({qqq_chg:+.2f}%)"
+            bias_mkt = "alcista" if spy_chg > 0.5 else ("bajista" if spy_chg < -0.5 else "neutral")
+            spy_qqq_ctx += f" | Sesgo mercado: {bias_mkt.upper()}"
+            log(f"→ {spy_qqq_ctx}", "OK")
+        except Exception as e:
+            log(f"SPY/QQQ context falló: {e}", "WARN")
+            spy_qqq_ctx = "No disponible"
+
         # Fase 2: Polygon
         log("Fase 2/4: Polygon.io datos históricos...")
         poly = get_poly(tickers) if tickers else {}
@@ -394,8 +415,26 @@ def task_analysis():
         log(f"→ Earnings hoy: {fmp.get('_today','ninguno')}", "OK")
 
         # Fase 3.5: Twelve Data precios en tiempo real
-        log("Fase 3.5/4: Twelve Data precios en tiempo real...")
+        log("Fase 3.5/4: Precios y volumen en tiempo real (yfinance)...")
         td_prices = get_realtime_prices(tickers) if tickers else {}
+
+        # Añadir volumen del primer minuto para confirmar fuerza de apertura
+        try:
+            import yfinance as yf
+            vol_data = yf.download(tickers, period="1d", interval="1m", progress=False)
+            if not vol_data.empty and "Volume" in vol_data:
+                vol_open = vol_data["Volume"].iloc[0]  # volumen primer minuto
+                vol_avg  = vol_data["Volume"].mean()   # volumen promedio del día hasta ahora
+                for sym in tickers:
+                    if sym in td_prices:
+                        v_open = float(vol_open[sym]) if sym in vol_open else 0
+                        v_avg  = float(vol_avg[sym])  if sym in vol_avg  else 0
+                        ratio  = round(v_open / v_avg, 2) if v_avg > 0 else 0
+                        td_prices[sym]["vol_open"]  = int(v_open)
+                        td_prices[sym]["vol_ratio"]  = ratio  # >1.5 = volumen fuerte
+        except Exception as e:
+            log(f"Volumen apertura falló: {e}", "WARN")
+
         log(f"  → {len(td_prices)} precios en tiempo real", "OK")
 
         # Fase 4: Claude análisis
@@ -404,12 +443,13 @@ def task_analysis():
         td_str = "\n".join(
             f"{s}: PRECIO_ACTUAL=${d['current']} ({'+' if d['gap_pct']>=0 else ''}{d['gap_pct']}% vs cierre_ayer) prev_close=${d['prev_close']}"
             + (f" open=${d['open']}" if d.get('open') else "")
-            + (f" PRE-MARKET=${d['pre_market']}" if d.get('pre_market') else "")
+            + (f" VOL_1MIN={d['vol_open']:,}" if d.get('vol_open') else "")
+            + (f" VOL_RATIO={d['vol_ratio']}x({'FUERTE' if d.get('vol_ratio',0)>=1.5 else 'NORMAL' if d.get('vol_ratio',0)>=0.8 else 'BAJO'})" if d.get('vol_ratio') else "")
             for s, d in td_prices.items()
         ) or "No disponible"
         analysis = call_claude(
             build_prompt(poly, fmp),
-            f"Hoy {today}. Candidatas: {list_str}. ES={sc.get('es','?')} NQ={sc.get('nq','?')} VIX={sc.get('vix','?')}. Earnings:{fmp.get('_today','ninguno')}.\n\nPRECIOS EN TIEMPO REAL — OBLIGATORIO usar estos precios para calcular entradas targets y stops:\n{td_str}\n\nSolo JSON con {{",
+            f"Hoy {today}. Candidatas: {list_str}. ES={sc.get('es','?')} NQ={sc.get('nq','?')} VIX={sc.get('vix','?')}. Earnings:{fmp.get('_today','ninguno')}.\n\nCONTEXTO MERCADO — usa esto para sesgar direccion de trades:\n{spy_qqq_ctx}\n\nPRECIOS EN TIEMPO REAL (mercado ya abierto) — OBLIGATORIO usar estos precios para entradas/targets/stops:\n{td_str}\n\nSolo JSON con {{",
             10000
         )
         trades = analysis.get("trades", [])
@@ -852,15 +892,13 @@ def setup_schedule():
     # 22:00 España = 20:00 UTC  |  22:05 España = 20:05 UTC
     # Monitor 15:32-21:58 España = 13:32-19:58 UTC
 
-    # Análisis pre-market: 13:25 UTC = 15:25 España = 9:25 AM ET
-    schedule.every().monday.at("13:25").do(guarded(task_analysis))
-    schedule.every().tuesday.at("13:25").do(guarded(task_analysis))
-    schedule.every().wednesday.at("13:25").do(guarded(task_analysis))
-    schedule.every().thursday.at("13:25").do(guarded(task_analysis))
-    schedule.every().friday.at("13:25").do(guarded(task_analysis))
-
-    # Apertura mercado: 13:30 UTC = 15:30 España = 9:30 AM ET
-    schedule.every().day.at("13:30").do(guarded(task_market_open))
+    # Análisis EN APERTURA: 13:30 UTC = 15:30 España = 9:30 AM ET
+    # Con mercado abierto tenemos precios reales, volumen real y gaps confirmados
+    schedule.every().monday.at("13:30").do(guarded(task_analysis))
+    schedule.every().tuesday.at("13:30").do(guarded(task_analysis))
+    schedule.every().wednesday.at("13:30").do(guarded(task_analysis))
+    schedule.every().thursday.at("13:30").do(guarded(task_analysis))
+    schedule.every().friday.at("13:30").do(guarded(task_analysis))
 
     # Monitoreo cada 2 min: 13:32-19:58 UTC = 15:32-21:58 España
     for h in range(13, 20):
