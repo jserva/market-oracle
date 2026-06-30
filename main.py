@@ -586,7 +586,7 @@ def task_market_open():
     # Sincronizar desde Supabase antes de procesar apertura
     today_iso = date.today().isoformat()
     try:
-        res = sb_query("trades", f"date=eq.{today_iso}&status=eq.PENDING&select=*")
+        res = sb_select("trades", {"date": f"eq.{today_iso}", "status": "eq.PENDING", "select": "*"})
         if res:
             for t in res:
                 sym = t.get("ticker")
@@ -656,7 +656,7 @@ def task_monitor():
     # Así el monitor sobrevive cualquier restart de Railway
     today_iso = date.today().isoformat()
     try:
-        res = sb_query("trades", f"date=eq.{today_iso}&status=in.(PENDING,ACTIVE,WAITING,WAITING_RETRACE)&select=*")
+        res = sb_select("trades", {"date": f"eq.{today_iso}", "status": "in.(PENDING,ACTIVE,WAITING,WAITING_RETRACE)", "select": "*"})
         if res:
             for t in res:
                 sym = t.get("ticker")
