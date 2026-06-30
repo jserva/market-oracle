@@ -979,7 +979,10 @@ def main():
     run_now = "--ahora" in sys.argv or os.environ.get("RUN_ON_START","").lower() == "true"
     if run_now:
         log("Ejecutando analisis AHORA (RUN_ON_START)...")
-        task_analysis()
+        try:
+            task_analysis()
+        except Exception as e:
+            log(f"ERROR en task_analysis inicial (no fatal, continuando): {e}", "ERR")
         if "--ahora" in sys.argv:
             return
         log("Analisis completado — arrancando loop...")
@@ -995,7 +998,11 @@ def main():
     log(f"Dia semana: {now0.weekday()} (0=Lun 4=Vie 5=Sab 6=Dom) | mercado={now0.weekday() < 5}", "OK")
 
     # Recargar trades activos de hoy desde Supabase (por si hubo restart)
-    reload_trades_from_supabase()
+    # PROTEGIDO: si esto falla, el proceso NO debe crashear
+    try:
+        reload_trades_from_supabase()
+    except Exception as e:
+        log(f"ERROR en reload inicial (no fatal, continuando): {e}", "ERR")
 
     while True:
         try:
@@ -1011,6 +1018,13 @@ def main():
                 if h == 15 and 30 <= m < 35 and last_analysis_date != today:
                     last_analysis_date = today
                     log(f"[{now.strftime('%H:%M')}] INICIANDO ANALISIS EN APERTURA")
+                    guarded(task_analysis)()
+
+                # RECUPERACION: si por restart/crash se perdio la ventana 15:30-15:34
+                # pero seguimos en horario de mercado (hasta 21:00), dispararlo igual una vez
+                elif h >= 15 and h < 21 and not (h == 15 and m < 30) and last_analysis_date != today:
+                    last_analysis_date = today
+                    log(f"[{now.strftime('%H:%M')}] RECUPERACION — ventana 15:30 perdida, ejecutando analisis ahora")
                     guarded(task_analysis)()
 
                 # 15:32-21:59 — Monitoreo cada 2 min
