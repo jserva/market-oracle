@@ -796,31 +796,6 @@ def task_monitor():
             close_trade(sym, trade, price, pnl_pct, pnl_usd, exit_reason)
 
 # ─── TAREA 4: CIERRE FORZADO 22:00 ───────────────────────────────
-def task_market_close():
-    """Cierra todos los trades abiertos al cerrar el mercado"""
-    global active_trades
-    log("MERCADO CERRADO — Cerrando posiciones abiertas", "TRADE")
-
-    # Recargar desde Supabase por si hubo restart durante el día
-    if not active_trades:
-        log("active_trades vacío en cierre — recargando desde Supabase...", "INFO")
-        reload_trades_from_supabase()
-
-    for sym, trade in list(active_trades.items()):
-        if trade["status"] != "ACTIVE":
-            continue
-        price = get_current_price(sym)
-        if not price:
-            price = trade.get("actual_entry") or trade["entry"]
-        entry = trade.get("actual_entry") or trade["entry"]
-        is_long = trade["dir"] == "long"
-        pnl_pct = ((price - entry) / entry * 100) if is_long else ((entry - price) / entry * 100)
-        pnl_usd = (pnl_pct / 100) * 10000
-        close_trade(sym, trade, price, pnl_pct, pnl_usd, "EOD")
-
-    # Resumen del día
-    task_daily_summary()
-
 def close_trade(sym, trade, exit_price, pnl_pct, pnl_usd, reason):
     """Registra el cierre de un trade con P&L sobre $10,000"""
     result = "WIN" if pnl_usd > 50 else "LOSS" if pnl_usd < -50 else "SCRATCH"
@@ -945,35 +920,11 @@ def guarded(fn):
             log(f"Fin de semana — {fn.__name__} omitido", "INFO")
     return wrapper
 
-def setup_schedule():
-    # ── HORARIOS EN UTC (Railway corre en UTC) ──────────────────────
-    # España verano UTC+2: hora_UTC = hora_España - 2
-    # 15:30 España = 13:30 UTC = 9:30 AM ET
-    # 22:00 España = 20:00 UTC  |  22:05 España = 20:05 UTC
-    # Monitor 15:32-21:58 España = 13:32-19:58 UTC
-
-    # Análisis EN APERTURA: 13:30 UTC = 15:30 España = 9:30 AM ET
-    # Con mercado abierto tenemos precios reales, volumen real y gaps confirmados
-    schedule.every().monday.at("13:30").do(guarded(task_analysis))
-    schedule.every().tuesday.at("13:30").do(guarded(task_analysis))
-    schedule.every().wednesday.at("13:30").do(guarded(task_analysis))
-    schedule.every().thursday.at("13:30").do(guarded(task_analysis))
-    schedule.every().friday.at("13:30").do(guarded(task_analysis))
-
-    # Monitoreo cada 2 min: 13:32-19:58 UTC = 15:32-21:58 España
-    for h in range(13, 20):
-        for m in range(0, 60, 2):
-            if (h == 13 and m < 32) or (h == 19 and m > 58):
-                continue
-            schedule.every().day.at(f"{h:02d}:{m:02d}").do(guarded(task_monitor))
-
-    # Cierre de mercado: 20:00 UTC = 22:00 España = 4:00 PM ET
-    schedule.every().day.at("20:00").do(guarded(task_market_close))
-
-    # Resumen final: 20:05 UTC = 22:05 España
-    schedule.every().day.at("20:05").do(guarded(task_daily_summary))
-
 # ─── MAIN ─────────────────────────────────────────────────────────
+# NOTA: el scheduling real ocurre en el loop while True de main(),
+# que usa TZ_SPAIN directamente (hora España nativa via zoneinfo).
+# La función setup_schedule() con la librería 'schedule' en UTC fue
+# eliminada por ser código muerto que nunca se invocaba — evita confusión.
 
 def reload_trades_from_supabase():
     """Recarga desde Supabase los trades de hoy que NO están cerrados (por restart)"""
@@ -1019,7 +970,7 @@ def main():
     log("=" * 55)
     log("MARKET ORACLE — Railway Cloud Worker")
     log("Zona horaria: Europa/Madrid")
-    log("Analisis: 15:25 | Apertura: 15:30 | Cierre: 22:00 | Monitor: c/2 min")
+    log("Analisis EN APERTURA: 15:30 | Cierre: 22:00 | Monitor: c/2 min")
     log("Supabase: OK" if SUPABASE_URL else "Supabase: NO CONFIGURADO")
     log("Anthropic: OK" if ANTHROPIC_KEY else "Anthropic: FALTA KEY")
     log("=" * 55)
