@@ -997,6 +997,16 @@ def main():
     log(f"Loop activo — hora Espana: {now0.strftime('%d/%m/%Y %H:%M:%S')}", "OK")
     log(f"Dia semana: {now0.weekday()} (0=Lun 4=Vie 5=Sab 6=Dom) | mercado={now0.weekday() < 5}", "OK")
 
+    # Verificar si el analisis de HOY ya se hizo (evita re-analisis tras restart)
+    try:
+        today_iso = date.today().isoformat()
+        existing = sb_select("trades", {"date": f"eq.{today_iso}", "select": "id"})
+        if existing:
+            last_analysis_date = now0.date()
+            log(f"Analisis de hoy ya existe en Supabase ({len(existing)} trades) — marcando como hecho", "OK")
+    except Exception as e:
+        log(f"No se pudo verificar analisis previo: {e} — continuando normal", "WARN")
+
     # Recargar trades activos de hoy desde Supabase (por si hubo restart)
     # PROTEGIDO: si esto falla, el proceso NO debe crashear
     try:
