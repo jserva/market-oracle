@@ -31,7 +31,7 @@ SUPABASE_KEY  = os.environ.get("SUPABASE_KEY",   "")   # anon public key
 TZ_SPAIN = ZoneInfo("Europe/Madrid")
 TZ_ET    = ZoneInfo("America/New_York")
 
-# ─── TWELVE DATA — PRECIOS EN TIEMPO REAL ─────────────────────────
+# ─── TWELVE DATA — solo para RSI técnico (opcional) ───────────────
 TWELVE_KEY = os.environ.get("TWELVE_KEY", "dff5698aa9f54d74978ba01360d62b74")
 
 def get_realtime_prices(tickers):
@@ -223,20 +223,24 @@ def get_fmp(sym):
 
 
 def get_current_price(sym):
-    """Precio actual via Twelve Data /price (tiempo real) con fallback a FMP"""
+    """Precio actual via yfinance — sin rate limit, sin API key"""
     try:
-        url = f"https://api.twelvedata.com/price?symbol={sym}&apikey={TWELVE_KEY}"
-        r = requests.get(url, headers={"User-Agent": "market-oracle"}, timeout=10)
-        data = r.json()
-        price = float(data.get("price", 0) or 0)
-        if price:
-            return price
+        data = yf.download(sym, period="1d", interval="1m", progress=False)
+        if not data.empty:
+            precio = data["Close"].iloc[-1]
+            val = float(precio.iloc[0]) if hasattr(precio, 'iloc') else float(precio)
+            if val > 0:
+                return val
     except:
         pass
-    # Fallback a FMP
+    # Fallback Polygon /prev
     try:
-        q = (fmp_get(f"/v3/quote/{sym}") or [{}])[0]
-        return float(q.get("price", 0) or 0) or None
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={POLYGON_KEY}",
+            timeout=8
+        )
+        res = r.json().get("results", [])
+        return float(res[0].get("c", 0)) if res else None
     except:
         return None
 
