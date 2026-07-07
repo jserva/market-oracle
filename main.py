@@ -333,16 +333,18 @@ BLOQUES OBLIGATORIOS POR ACCION:
 1-CATALIZADOR: nuevo hoy o ya descontado?
 2-GAP TRAMPA: gap mayor 5%=quemado gapTrap=true esperar retroceso
 3-CONTRA-NOTICIAS: busca noticias negativas cada una -10pts probabilidad
-4-RIESGO REGULATORIO: proyectos federales subsidios litigios -8pts
+4-RIESGO REGULATORIO: proyectos federales subsidios litigios -8pts. CRITICO: si regulatory_risk=true descuenta 15pts adicionales. Si prob final <68 tras descuento=descartar ese ticker completamente y buscar otro sin riesgo regulatorio
 5-TECNICOS: RSI14 EMA9/20 soporte resistencia patron volumen
 6-OPCIONES/SHORT: PCR IV unusual short_float days_to_cover
-7-ENTRADA PRECISA: gap<3%=open gap3-5%=wait15 gap>5%=wait_retrace con precio exacto. VOLUMEN: si VOL_RATIO<0.8=BAJO evitar entrada hasta confirmar volumen; si VOL_RATIO>=1.5=FUERTE priorizar trade; incluir condicion de volumen en entryCondition. OBLIGATORIO: si no puedes calcular entryPrice concreto con los precios reales provistos descarta ese ticker y elige otro. NUNCA enviar entryPrice=0 t1=0 stop=0. CRITICO: si usas wait_retrace el entryPrice DEBE estar dentro del rango intraday real (maximo 5% por debajo del precio actual). Si el retroceso necesario es mayor al 5% desde precio actual=descarta el ticker, el gap ya esta quemado y no hay setup valido.
+7-ENTRADA PRECISA: SOLO DOS ESTRATEGIAS PERMITIDAS: open (entra en apertura al precio actual) o wait_retrace (espera pullback maximo 2% desde precio actual). PROHIBIDO usar wait15 — demostrado empiricamente que genera losses. VOLUMEN OBLIGATORIO: VOL_RATIO>=1.5=FUERTE unico caso valido para entrar; VOL_RATIO<1.5=descartar ticker y buscar otro con mas volumen. CRITICO: wait_retrace entryPrice DEBE estar maximo 2% por debajo del precio actual. Si no hay 3 tickers con VOL_RATIO>=1.5 selecciona los de mayor ratio disponible. NUNCA enviar entryPrice=0 t1=0 stop=0.
 
 PROBABILIDAD: cat(25)+tech(20)+vol(15)+sec(10)+opt(10)+mac(8)+atr(7)+sho(5)
 DESCUENTOS AUTOMATICOS: gap quemado=-15pts contra_noticia=-10pts riesgo_reg=-8pts
 
 REGLA: {{ al inicio }} al final. Sin comillas en strings. Max 80 chars texto.
-CRITICO: SIEMPRE devuelve EXACTAMENTE 3 trades en el array "trades". Si no encuentras 3 con alta probabilidad, baja el umbral y selecciona los mejores disponibles de las candidatas. NUNCA devuelvas menos de 3 trades.
+CRITICO: SIEMPRE devuelve EXACTAMENTE 3 trades en el array "trades". Si no encuentras 3 con alta probabilidad, baja el umbral y selecciona los mejores disponibles. NUNCA devuelvas menos de 3 trades.
+DIRECCION: si el sesgo de mercado es ALCISTA o NEUTRAL usa preferentemente longs. Solo usar shorts si sesgo es BAJISTA o VIX>20. Con mercado alcista los shorts van contra la corriente y tienen menor probabilidad de exito.
+PROBABILIDAD MINIMA: descarta cualquier trade con prob<68. Si necesitas completar 3 trades y no hay candidatos con prob>=68, sube ligeramente el scoring pero nunca por debajo de 62.
 
 {{"date":"YYYY-MM-DD","at":"HH:MM ET","env":"ideal|good|difficult|avoid","vix":0.0,"spx":"s","summary":"s","score":0,"trades":[{{"t":"SYM","name":"s","dir":"long|short","prob":0,"label":"MUY ALTA|ALTA|MODERADA|BAJA","strat":"s","gapPct":"s","gapTrap":false,"gapWarn":"s","regulatoryRisk":false,"regulatoryDetail":"s","counterNews":["s"],"entryStrategy":"open|wait15|wait_retrace","entryPrice":0.0,"entryCondition":"s","sc":{{"cat":0,"tech":0,"vol":0,"sec":0,"opt":0,"mac":0,"atr":0,"sho":0}},"t1":0.0,"t2":0.0,"stop":0.0,"rr":"s","gain":"s","loss":"s","win":"s","rsi":0,"macd":"bull|bear","ema9":0.0,"ema20":0.0,"sup":0.0,"res":0.0,"pat":"s","pcr":0.0,"iv":"s","sf":"s","dtc":0.0,"cats":["s"],"risks":["s"],"note":"s"}}],"news":[{{"h":"s","src":"s","tk":"SYM","cat":"s","sent":"bull|bear|neu","imp":"high|med|low"}}],"rej":[{{"t":"s","r":"s"}}],"disc":"s"}}
 
@@ -511,6 +513,24 @@ def task_analysis():
             # Validar que el trade tiene precios definidos
             if not t.get("entryPrice") or float(t.get("entryPrice", 0)) <= 0:
                 log(f"  {sym}: sin precio de entrada — trade descartado", "WARN")
+                continue
+            # Rechazar wait15 — demostrado empíricamente con 30% win rate
+            if t.get("entryStrategy") == "wait15":
+                log(f"  {sym}: estrategia wait15 rechazada — cambiando a open", "WARN")
+                t["entryStrategy"] = "open"  # convertir a open en vez de descartar
+            # Rechazar shorts si sesgo alcista
+            spy_bias = spy_qqq_ctx.lower() if 'spy_qqq_ctx' in dir() else ""
+            if t.get("dir") == "short" and "alcista" in spy_bias:
+                log(f"  {sym}: short rechazado — sesgo de mercado ALCISTA", "WARN")
+                continue
+            # Rechazar prob < 62
+            if float(t.get("prob", 0)) < 62:
+                log(f"  {sym}: probabilidad {t.get('prob')}% < 62% mínimo — descartado", "WARN")
+                continue
+            # Validar VOL_RATIO mínimo — tickers con bajo volumen tienen peor win rate
+            vol_ratio = float(td_prices.get(sym, {}).get("vol_ratio") or 0)
+            if vol_ratio > 0 and vol_ratio < 0.8:
+                log(f"  {sym}: VOL_RATIO={vol_ratio} demasiado bajo — descartado", "WARN")
                 continue
             # Ajustar entryPrice: si el precio actual supera la entrada en más del 2%,
             # recalcular entrada como precio_actual - 1.5% (pullback realista)
