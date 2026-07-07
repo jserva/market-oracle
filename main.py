@@ -342,6 +342,7 @@ PROBABILIDAD: cat(25)+tech(20)+vol(15)+sec(10)+opt(10)+mac(8)+atr(7)+sho(5)
 DESCUENTOS AUTOMATICOS: gap quemado=-15pts contra_noticia=-10pts riesgo_reg=-8pts
 
 REGLA: {{ al inicio }} al final. Sin comillas en strings. Max 80 chars texto.
+CRITICO: SIEMPRE devuelve EXACTAMENTE 3 trades en el array "trades". Si no encuentras 3 con alta probabilidad, baja el umbral y selecciona los mejores disponibles de las candidatas. NUNCA devuelvas menos de 3 trades.
 
 {{"date":"YYYY-MM-DD","at":"HH:MM ET","env":"ideal|good|difficult|avoid","vix":0.0,"spx":"s","summary":"s","score":0,"trades":[{{"t":"SYM","name":"s","dir":"long|short","prob":0,"label":"MUY ALTA|ALTA|MODERADA|BAJA","strat":"s","gapPct":"s","gapTrap":false,"gapWarn":"s","regulatoryRisk":false,"regulatoryDetail":"s","counterNews":["s"],"entryStrategy":"open|wait15|wait_retrace","entryPrice":0.0,"entryCondition":"s","sc":{{"cat":0,"tech":0,"vol":0,"sec":0,"opt":0,"mac":0,"atr":0,"sho":0}},"t1":0.0,"t2":0.0,"stop":0.0,"rr":"s","gain":"s","loss":"s","win":"s","rsi":0,"macd":"bull|bear","ema9":0.0,"ema20":0.0,"sup":0.0,"res":0.0,"pat":"s","pcr":0.0,"iv":"s","sf":"s","dtc":0.0,"cats":["s"],"risks":["s"],"note":"s"}}],"news":[{{"h":"s","src":"s","tk":"SYM","cat":"s","sent":"bull|bear|neu","imp":"high|med|low"}}],"rej":[{{"t":"s","r":"s"}}],"disc":"s"}}
 
@@ -384,8 +385,29 @@ def task_analysis():
                 ],
                 "earn": [], "news": "Mercado en sesion normal"
             }
-        tickers = [c["t"] for c in sc.get("c",[]) if c.get("t")]
-        log(f"→ {len(tickers)} candidatas: {', '.join(tickers)}", "OK")
+        tickers_raw = [c["t"] for c in sc.get("c",[]) if c.get("t")]
+        # Validar que los tickers existen y tienen precio real
+        try:
+            import yfinance as yf
+            val_data = yf.download(tickers_raw, period="1d", interval="1d", progress=False)
+            if not val_data.empty and "Close" in val_data:
+                close_val = val_data["Close"].iloc[-1] if len(val_data) > 0 else None
+                tickers = []
+                for t in tickers_raw:
+                    try:
+                        p = float(close_val[t]) if close_val is not None and t in close_val else 0
+                        if p > 0 and str(p) != "nan":
+                            tickers.append(t)
+                        else:
+                            log(f"  {t}: ticker inválido o sin datos — descartado del screener", "WARN")
+                    except:
+                        log(f"  {t}: error validando precio — descartado", "WARN")
+            else:
+                tickers = tickers_raw
+        except Exception as e:
+            log(f"Validación tickers falló: {e} — usando todos", "WARN")
+            tickers = tickers_raw
+        log(f"→ {len(tickers)} candidatas válidas: {', '.join(tickers)}", "OK")
 
         # Fase 1.5: Contexto SPY/QQQ día anterior
         log("Fase 1.5/4: Contexto mercado SPY/QQQ...")
@@ -572,6 +594,10 @@ def task_analysis():
                 log(f"  → {t.get('entryCondition','')}", "INFO")
 
         saved_count = sum(1 for t in active_trades.values() if t.get("id"))
+
+        # FIX: si guardamos menos de 3, loguear advertencia clara
+        if saved_count < 3:
+            log(f"⚠️  ALERTA: solo {saved_count}/3 trades guardados — revisar análisis", "WARN")
         if saved_count > 0:
             log(f"Análisis guardado en Supabase ✓ ({saved_count}/{len(trades)} trades)", "OK")
         else:
