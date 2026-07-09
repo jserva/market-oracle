@@ -458,7 +458,7 @@ def task_analysis():
                         v_open = float(vol_open[sym]) if sym in vol_open else 0
                         v_avg  = float(vol_avg[sym])  if sym in vol_avg  else 0
                         ratio  = round(v_open / v_avg, 2) if v_avg > 0 else 0
-                        td_prices[sym]["vol_open"]  = int(v_open)
+                        td_prices[sym]["vol_open"]  = int(v_open) if v_open and str(v_open) != "nan" else 0
                         td_prices[sym]["vol_ratio"]  = ratio  # >1.5 = volumen fuerte
         except Exception as e:
             log(f"Volumen apertura falló: {e}", "WARN")
@@ -485,24 +485,27 @@ def task_analysis():
 
         # Guardar análisis diario en Supabase
         today_iso = date.today().isoformat()
-        da_result = sb_upsert("daily_analysis", {
-            "date": today_iso,
-            "analysis_time": datetime.now(TZ_SPAIN).isoformat(),
-            "vix": analysis.get("vix"),
-            "spx_futures": analysis.get("spx"),
-            "nq_futures": sc.get("nq"),
-            "es_futures": sc.get("es"),
-            "environment": analysis.get("env"),
-            "score": analysis.get("score"),
-            "market_bias": sc.get("bias"),
-            "summary": analysis.get("summary","")[:500],
-            "screened_count": len(tickers),
-            "trades_count": len(trades),
-            "td_prices_json": json.dumps(td_prices),
-            "full_json": json.dumps(analysis)[:3000]
-        })
-        if not da_result:
-            log("⚠️  daily_analysis INSERT falló — revisa columnas en Supabase", "WARN")
+        try:
+            da_result = sb_upsert("daily_analysis", {
+                "date": today_iso,
+                "analysis_time": datetime.now(TZ_SPAIN).isoformat(),
+                "vix": analysis.get("vix"),
+                "spx_futures": analysis.get("spx"),
+                "nq_futures": sc.get("nq"),
+                "es_futures": sc.get("es"),
+                "environment": analysis.get("env"),
+                "score": analysis.get("score"),
+                "market_bias": sc.get("bias"),
+                "summary": analysis.get("summary","")[:500],
+                "screened_count": len(tickers),
+                "trades_count": len(trades),
+                "td_prices_json": json.dumps(td_prices),
+                "full_json": json.dumps(analysis)[:3000]
+            })
+            if not da_result:
+                log("⚠️  daily_analysis INSERT falló — continuando con trades", "WARN")
+        except Exception as e:
+            log(f"⚠️  daily_analysis error (no fatal): {e}", "WARN")
 
         # Guardar cada trade recomendado
         global active_trades
@@ -687,13 +690,7 @@ def task_market_open():
                 }, "id", trade["id"])
             log(f"{'▲' if trade['dir']=='long' else '▼'} {sym} ENTRADA REAL en ${actual_entry:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
 
-        elif strategy == "wait15":
-            trade["status"] = "WAITING"
-            log(f"⏱ {sym} esperando 15 min para confirmar entrada", "INFO")
-
-        elif strategy == "wait_retrace":
-            trade["status"] = "WAITING_RETRACE"
-            log(f"⏳ {sym} esperando retroceso a ${trade['entry']:.2f} (actual: ${price:.2f})", "INFO")
+        # wait15/wait_retrace eliminados — todo entra como open
 
 # ─── TAREA 3: MONITOREO CADA 2 MIN ───────────────────────────────
 def task_monitor():
@@ -704,7 +701,7 @@ def task_monitor():
     # Así el monitor sobrevive cualquier restart de Railway
     today_iso = date.today().isoformat()
     try:
-        res = sb_select("trades", {"date": f"eq.{today_iso}", "status": "in.(PENDING,ACTIVE,WAITING,WAITING_RETRACE)", "select": "*"})
+        res = sb_select("trades", {"date": f"eq.{today_iso}", "status": "in.(PENDING,ACTIVE,WAITING_RETRACE)", "select": "*"})
         if res:
             for t in res:
                 sym = t.get("ticker")
@@ -769,49 +766,24 @@ def task_monitor():
                     if trade.get("id"):
                         sb_update("trades", {"actual_entry_price": price, "entry_time": datetime.now(TZ_SPAIN).isoformat(), "status": "ACTIVE"}, "id", trade["id"])
                     log(f"▲ {sym} ENTRADA (post-open) en ${price:.2f} | {trade['shares']:.2f} acc | $10,000", "MONEY")
-                elif strategy == "wait15":
-                    trade["status"] = "WAITING"
-                    if trade.get("id"):
-                        sb_update("trades", {"status": "WAITING"}, "id", trade["id"])
-                    log(f"⏱ {sym} → WAITING (wait15)", "INFO")
-                elif strategy == "wait_retrace":
-                    trade["status"] = "WAITING_RETRACE"
-                    if trade.get("id"):
-                        sb_update("trades", {"status": "WAITING_RETRACE"}, "id", trade["id"])
-                    log(f"⏳ {sym} → WAITING_RETRACE a ${trade['entry']:.2f}", "INFO")
+                # wait15/wait_retrace eliminados — todo entra como open
             continue
 
         # ── Gestionar entradas pendientes ──────────────────────────
-        if trade["status"] == "WAITING":
-            # wait15: entrar si ya pasaron 15 min y precio cerca de entrada
-            open_time_et = now_et.replace(hour=9, minute=45, second=0)
-            if now_et >= open_time_et:
-                actual_entry = price  # entrar al precio actual
-                trade["actual_entry"] = actual_entry
-                trade["status"] = "ACTIVE"
-                if trade.get("id"):
-                    sb_update("trades", {"actual_entry_price": actual_entry, "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
-                shares = round(10000 / actual_entry, 4) if actual_entry and actual_entry > 0 else 0 if actual_entry else 0
-                trade["shares"] = shares
-                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA WAIT15 en ${actual_entry:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
-            continue
+        # Status WAITING eliminado — era para wait15 que ya no existe
 
         if trade["status"] == "WAITING_RETRACE":
-            # Entrar cuando el precio toca el nivel de entrada recomendado
-            if not trade.get("entry") or trade["entry"] <= 0:
-                log(f"  {sym}: entry=0 en WAITING_RETRACE — saltando", "WARN")
+            # Convertir a ACTIVE inmediatamente al precio actual (wait_retrace eliminado)
+            actual_entry = price
+            trade["actual_entry"] = actual_entry
+            trade["status"] = "ACTIVE"
+            shares = round(10000 / actual_entry, 4) if actual_entry > 0 else 0
+            trade["shares"] = shares
+            if trade.get("id"):
+                sb_update("trades", {"actual_entry_price": actual_entry, "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
+            log(f"{'▲' if is_long else '▼'} {sym} ENTRADA (retrace→open) en ${actual_entry:.2f} | {shares:.2f} acciones", "MONEY")
+            if shares == 0:
                 continue
-            diff_pct = abs(price - trade["entry"]) / trade["entry"] * 100
-            if diff_pct <= 0.3:  # dentro del 0.3% del precio objetivo
-                trade["actual_entry"] = trade["entry"]
-                trade["status"] = "ACTIVE"
-                if trade.get("id"):
-                    sb_update("trades", {"actual_entry_price": trade["entry"], "entry_time": now_spain.isoformat(), "status":"ACTIVE"}, "id", trade["id"])
-                shares = round(10000 / trade["entry"], 4)
-                trade["shares"] = shares
-                log(f"{'▲' if is_long else '▼'} {sym} ENTRADA RETRACE en ${trade['entry']:.2f} | {shares:.2f} acciones | Capital: $10,000", "MONEY")
-            else:
-                log(f"⏳ {sym} esperando retrace | Actual: ${price:.2f} | Objetivo: ${trade['entry']:.2f} | Diff: {diff_pct:.1f}%")
             continue
 
         if trade["status"] != "ACTIVE":
