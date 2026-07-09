@@ -336,7 +336,7 @@ BLOQUES OBLIGATORIOS POR ACCION:
 4-RIESGO REGULATORIO: proyectos federales subsidios litigios -8pts. CRITICO: si regulatory_risk=true descuenta 15pts adicionales. Si prob final <68 tras descuento=descartar ese ticker completamente y buscar otro sin riesgo regulatorio
 5-TECNICOS: RSI14 EMA9/20 soporte resistencia patron volumen
 6-OPCIONES/SHORT: PCR IV unusual short_float days_to_cover
-7-ENTRADA PRECISA: SOLO DOS ESTRATEGIAS PERMITIDAS: open (entra en apertura al precio actual) o wait_retrace (espera pullback maximo 2% desde precio actual). PROHIBIDO usar wait15 — demostrado empiricamente que genera losses. VOLUMEN OBLIGATORIO: VOL_RATIO>=1.5=FUERTE unico caso valido para entrar; VOL_RATIO<1.5=descartar ticker y buscar otro con mas volumen. CRITICO: wait_retrace entryPrice DEBE estar maximo 2% por debajo del precio actual. Si no hay 3 tickers con VOL_RATIO>=1.5 selecciona los de mayor ratio disponible. NUNCA enviar entryPrice=0 t1=0 stop=0.
+7-ENTRADA: UNICA ESTRATEGIA PERMITIDA es open — SIEMPRE entra en apertura al precio actual del momento. PROHIBIDO usar wait15 o wait_retrace — demostrado empiricamente que pierden trades buenos esperando pullbacks que no llegan. entryPrice DEBE ser el precio actual del ticker. NUNCA enviar entryPrice=0.
 
 PROBABILIDAD: cat(25)+tech(20)+vol(15)+sec(10)+opt(10)+mac(8)+atr(7)+sho(5)
 DESCUENTOS AUTOMATICOS: gap quemado=-15pts contra_noticia=-10pts riesgo_reg=-8pts
@@ -346,7 +346,7 @@ CRITICO: SIEMPRE devuelve EXACTAMENTE 3 trades en el array "trades". Si no encue
 DIRECCION: si el sesgo de mercado es ALCISTA o NEUTRAL usa preferentemente longs. Solo usar shorts si sesgo es BAJISTA o VIX>20. Con mercado alcista los shorts van contra la corriente y tienen menor probabilidad de exito.
 PROBABILIDAD MINIMA: descarta cualquier trade con prob<68. Si necesitas completar 3 trades y no hay candidatos con prob>=68, sube ligeramente el scoring pero nunca por debajo de 62.
 
-{{"date":"YYYY-MM-DD","at":"HH:MM ET","env":"ideal|good|difficult|avoid","vix":0.0,"spx":"s","summary":"s","score":0,"trades":[{{"t":"SYM","name":"s","dir":"long|short","prob":0,"label":"MUY ALTA|ALTA|MODERADA|BAJA","strat":"s","gapPct":"s","gapTrap":false,"gapWarn":"s","regulatoryRisk":false,"regulatoryDetail":"s","counterNews":["s"],"entryStrategy":"open|wait15|wait_retrace","entryPrice":0.0,"entryCondition":"s","sc":{{"cat":0,"tech":0,"vol":0,"sec":0,"opt":0,"mac":0,"atr":0,"sho":0}},"t1":0.0,"t2":0.0,"stop":0.0,"rr":"s","gain":"s","loss":"s","win":"s","rsi":0,"macd":"bull|bear","ema9":0.0,"ema20":0.0,"sup":0.0,"res":0.0,"pat":"s","pcr":0.0,"iv":"s","sf":"s","dtc":0.0,"cats":["s"],"risks":["s"],"note":"s"}}],"news":[{{"h":"s","src":"s","tk":"SYM","cat":"s","sent":"bull|bear|neu","imp":"high|med|low"}}],"rej":[{{"t":"s","r":"s"}}],"disc":"s"}}
+{{"date":"YYYY-MM-DD","at":"HH:MM ET","env":"ideal|good|difficult|avoid","vix":0.0,"spx":"s","summary":"s","score":0,"trades":[{{"t":"SYM","name":"s","dir":"long|short","prob":0,"label":"MUY ALTA|ALTA|MODERADA|BAJA","strat":"s","gapPct":"s","gapTrap":false,"gapWarn":"s","regulatoryRisk":false,"regulatoryDetail":"s","counterNews":["s"],"entryStrategy":"open","entryPrice":0.0,"entryCondition":"s","sc":{{"cat":0,"tech":0,"vol":0,"sec":0,"opt":0,"mac":0,"atr":0,"sho":0}},"t1":0.0,"t2":0.0,"stop":0.0,"rr":"s","gain":"s","loss":"s","win":"s","rsi":0,"macd":"bull|bear","ema9":0.0,"ema20":0.0,"sup":0.0,"res":0.0,"pat":"s","pcr":0.0,"iv":"s","sf":"s","dtc":0.0,"cats":["s"],"risks":["s"],"note":"s"}}],"news":[{{"h":"s","src":"s","tk":"SYM","cat":"s","sent":"bull|bear|neu","imp":"high|med|low"}}],"rej":[{{"t":"s","r":"s"}}],"disc":"s"}}
 
 3 trades. 5 noticias. JSON compacto."""
 
@@ -515,9 +515,10 @@ def task_analysis():
                 log(f"  {sym}: sin precio de entrada — trade descartado", "WARN")
                 continue
             # Rechazar wait15 — demostrado empíricamente con 30% win rate
-            if t.get("entryStrategy") == "wait15":
-                log(f"  {sym}: estrategia wait15 rechazada — cambiando a open", "WARN")
-                t["entryStrategy"] = "open"  # convertir a open en vez de descartar
+            # Forzar siempre open — wait15 y wait_retrace eliminados
+            if t.get("entryStrategy") in ("wait15", "wait_retrace"):
+                log(f"  {sym}: estrategia {t.get('entryStrategy')} → forzado a open", "WARN")
+                t["entryStrategy"] = "open"
             # Rechazar shorts si sesgo alcista
             spy_bias = spy_qqq_ctx.lower() if 'spy_qqq_ctx' in dir() else ""
             if t.get("dir") == "short" and "alcista" in spy_bias:
@@ -532,16 +533,13 @@ def task_analysis():
             if vol_ratio > 0 and vol_ratio < 0.8:
                 log(f"  {sym}: VOL_RATIO={vol_ratio} demasiado bajo — descartado", "WARN")
                 continue
-            # Ajustar entryPrice: si el precio actual supera la entrada en más del 2%,
-            # recalcular entrada como precio_actual - 1.5% (pullback realista)
+            # Entrada siempre al precio actual (estrategia open)
             precio_actual = float(td_prices.get(sym, {}).get("current") or 0)
             entry_price = float(t.get("entryPrice", 0))
-            if precio_actual > 0 and entry_price > 0:
-                diff_pct = (precio_actual - entry_price) / precio_actual * 100
-                if diff_pct > 2:
-                    entry_ajustada = round(precio_actual * 0.985, 2)  # pullback -1.5% desde actual
-                    log(f"  {sym}: entrada ajustada ${entry_price} → ${entry_ajustada} (pullback 1.5% desde ${precio_actual})", "INFO")
-                    t["entryPrice"] = entry_ajustada
+            if precio_actual > 0:
+                if entry_price <= 0 or abs(precio_actual - entry_price) / precio_actual > 0.05:
+                    log(f"  {sym}: entryPrice ajustado al precio actual ${precio_actual}", "INFO")
+                    t["entryPrice"] = precio_actual
             rec_data = {
                 "date": today_iso,
                 "ticker": sym,
